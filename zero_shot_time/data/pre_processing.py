@@ -1,11 +1,14 @@
 import logging
 import typing as tp
 
-import datasets
 import numpy as np
+import torch
 import transformers
+from sklearn.base import TransformerMixin
 from sklearn.preprocessing import MinMaxScaler
 from transformers import BatchEncoding
+
+import datasets
 
 
 def pre_process_values(values, **scaler_kwargs):
@@ -22,9 +25,11 @@ def pre_process_values(values, **scaler_kwargs):
 
 
     """
-    logging.warning("Calling the pre_process_values function with a complete timeseries may leak information about the"
-                    "future. To prevent leakage of information, only provide the values till the point that you want to"
-                    "start generating from.")
+    logging.warning(
+        "Calling the pre_process_values function with a complete timeseries may leak information about the"
+        "future. To prevent leakage of information, only provide the values till the point that you want to"
+        "start generating from."
+    )
     scaler = MinMaxScaler(**scaler_kwargs)
     scaler.fit(values[:, None])
 
@@ -33,25 +38,29 @@ def pre_process_values(values, **scaler_kwargs):
     return scaler, transformed_values.flatten()
 
 
-def convert_timeseries_to_fixed_precision(dataset: datasets.Dataset, tokenizer: transformers.PreTrainedTokenizerFast, target: str):
+def convert_timeseries_to_fixed_precision(
+    dataset: datasets.Dataset, tokenizer: transformers.PreTrainedTokenizerFast, target: str, precision: int = 5
+) -> (TransformerMixin, np.array, torch.LongTensor):
     """Helper function to convert a time-series dataset (split) from numerical representation to a fixed precision
     representation.
 
     Args:
         dataset (Dataset): Huggingface (compatible) dataset of a time series (split).
         target (str): Target (column) name of which to convert to a specific timeseries.
-
+        precision (int): Number of precision tokens to use.
     """
     values = dataset[target]
 
     pre_processor, pre_processed_values = pre_process_values(np.array(values))
-    _, stringified_values = stringify_values(pre_processed_values, precision=4, value_mapper=map_substring_to_token)
+    _, stringified_values = stringify_values(
+        pre_processed_values, precision=precision, value_mapper=map_substring_to_tokens
+    )
     time_series_tokens = tokenize_values(stringified_values, tokenizer)
 
     return pre_processor, pre_processed_values, time_series_tokens
 
 
-def map_substring_to_token(value: tp.List[str], sign=None) -> tp.List[str]:
+def map_substring_to_tokens(value: tp.List[str], sign=None) -> tp.List[str]:
     """Helper function to map a 'stringified' representation of a number to its corresponding 'token string'. E.g. to
     map '0' to ' 0', in case of the default algorithm.
 
@@ -60,7 +69,7 @@ def map_substring_to_token(value: tp.List[str], sign=None) -> tp.List[str]:
     """
     ret = []
     if sign is not None:
-        ret += '+' if sign else '-'
+        ret += "+" if sign else "-"
     return ret + [f" {char}" for char in value]
 
 
@@ -83,7 +92,7 @@ def convert_values(values: tp.Union[np.array], base=10, abs_max=None, precision=
         raise NotImplementedError("Currently does not support generation of 'rounded' values in arbitrary base.")
     # TODO: Generatize beyond base 10 encoding
     if precision > 0:
-        values = values * base ** precision
+        values = values * base**precision
     representation = np.round(values).astype(np.int32)
     stringified = [mapper_function(list(str(value)), sign=sign) for value, sign in zip(representation, signs)]
     return signs, stringified
@@ -146,3 +155,40 @@ def tokenize_values(
 
     # One very long tensor with the corresponding input_ids', further handling should be done by the caller.
     return values_representation
+
+
+def limit_token_input_length(input_ids: torch.LongTensor, max_samples: int, delimiter_id: int):
+    """Helper function to limit the length of input base on a maximum number of samples. Note this function assumes that
+    provided data is always a batch of the same data, i.e. no different time-series, or different time-series lenghts
+    are provided!
+
+    Args:
+        input_ids (torch.LongTensor): Tensor containing the input identifiers of encoded input.
+        max_samples (int): Maximum number of samples to select from an encoded list.
+
+    Returns:
+        torch.LongTensor of input ids containig the `min(len(input_ids[0], max_samples))` last samples of a time-series,
+        using the encoded/input ids from a generative's models output.
+    """
+    indices = (input_ids[0] == delimiter_id).nonzero(as_tuple=True)
+    if indices.size(-1) < max_samples:
+        return input_ids
+
+    else:
+        return input_ids[:, indices[-max_samples] :]
+
+
+def limit_series_length(values: np.array, max_history_length: int) -> np.array:
+    """Helper function to limit the series length.
+
+    Args:
+        values (np.array): Numpy array containing the original or transformed values before tokenization.
+        max_samples (int): Maximum number of samples to select from an encoded list.
+
+    Returns:
+        torch.LongTensor of input ids containig the `min(len(input_ids[0], max_samples))` last samples of a time-series,
+        using the encoded/input ids from a generative's models output.
+
+    """
+    # In case max_history_length exceeds the passed list length, the original list will be returned.
+    return values[-max_history_length:]
