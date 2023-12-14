@@ -1,12 +1,11 @@
+import argparse
 import logging
 import typing as tp
-
-import argparse
 
 import transformers
 
 from zero_shot_time.data import get_dataset, pre_processing
-from zero_shot_time.generation.tokenizer import set_padding_or_none
+from zero_shot_time.generation import set_padding_or_none
 
 
 def main(
@@ -14,7 +13,7 @@ def main(
     dataset: str = "hpc",
     sub_category: tp.Optional[str] = None,
     max_history: int = 400,
-    truncation: str = "before"
+    truncation: str = "before",
 ) -> None:
     # 1.1 Load model
     model: transformers.GPT2Model = transformers.AutoModel.from_pretrained(model)
@@ -28,7 +27,7 @@ def main(
     dataset, target = get_dataset(dataset_name=dataset, sub_category=sub_category)
 
     # TODO: Create train / test split according to paper
-    if truncation == 'before':
+    if truncation == "before":
         logging.warning("Truncating before pre-processing will affect the 'range' of the scaled values!")
         # TODO: Implement maximum length split.
     # 3. Pre-process data, and get mapping function to re-construct
@@ -37,9 +36,9 @@ def main(
         dataset, tokenizer, target=target
     )
 
-    if truncation == 'after':
+    if truncation == "after":
         raise NotImplementedError("Input truncation based on tokenization length is not yet supported!")
-        logging.warning("Truncating ")
+        logging.warning("Truncating will leak information of previous states")
     print(input_ids)
 
 
