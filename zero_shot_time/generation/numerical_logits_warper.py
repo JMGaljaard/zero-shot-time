@@ -25,24 +25,27 @@ class NumericalLogitsWarper(LogitsWarper):
 
     """
 
-    def __init__(self, vocabulary_size: int, numerical_token_ids: tp.Union[torch.LongTensor, tp.List[int]], padding_token_id: tp.Optional[int], seperator_token_id: tp.Optional[int], device='cuda'):
-        assert isinstance(vocabulary_size, int), 'Vocabulary cardinality needs to be int'
-        assert isinstance(numerical_token_ids, (torch.LongTensor, tp.List[int])), 'Numerical tokens are to be provided in a tensor or ' \
-                                                                                  'List.'
-        assert len(numerical_token_ids) > 0, 'Numerical generation requires a non-zero number of token ids'
+    def __init__(
+        self,
+        vocabulary_size: int,
+        numerical_token_ids: tp.Union[torch.LongTensor, tp.List[int]],
+        padding_token_id: tp.Optional[int],
+        seperator_token_id: tp.Optional[int],
+        device="cuda",
+    ):
+        assert isinstance(vocabulary_size, int), "Vocabulary cardinality needs to be int"
+        assert isinstance(numerical_token_ids, (torch.LongTensor, tp.List[int])), (
+            "Numerical tokens are to be provided in a tensor or " "List."
+        )
+        assert len(numerical_token_ids) > 0, "Numerical generation requires a non-zero number of token ids"
 
         self.device = device
-        self.mask = torch.ones(
-            (vocabulary_size),
-            device=device,
-            dtype=torch.bool
-        )
+        self.mask = torch.ones((vocabulary_size), device=device, dtype=torch.bool)
         self.numerical_token_ids = torch.tensor(numerical_token_ids, dtype=torch.int32)
         self.padding_token_id = padding_token_id
         self.seperator_token_id = seperator_token_id
 
         self.init_mask()
-
 
     def init_mask(self):
         """Initialization function to be called during construction, will initialize the token mask to be used during
@@ -56,14 +59,11 @@ class NumericalLogitsWarper(LogitsWarper):
         if self.seperator_token_id is not None:
             self.mask[self.seperator_token_id] = False
 
-
-
     @add_start_docstrings(LOGITS_PROCESSOR_INPUTS_DOCSTRING)
-    def __call__(self,  input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
         # inputs [batch_size, vocabulary]
         # scores [batch_size, vocabulary]
 
         scores[self.mask] = -float("inf")
 
         return scores
-
