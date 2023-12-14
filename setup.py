@@ -11,11 +11,12 @@ setup(
             'transformers==4.35.2',
             'black==23.11.0',
             'ruff==0.1.6'
-            'scikit-learn==1.3.2'
+            'scikit-learn==1.3.2',
+            'parameterized'
         ],
         url='https://github.com/JMGaljaard/zero-shot-time',
         license='',
         author='JMGaljaard',
         author_email='J.M.Galjaard@tudelft.nl',
-        description='',
+        description='Basic package providing functionality to re-implement Zero-Shot time series forecasting',
 )
