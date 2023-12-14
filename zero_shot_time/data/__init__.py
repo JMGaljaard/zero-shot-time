@@ -2,10 +2,8 @@ import typing as tp
 
 import datasets
 
-import zero_shot_time.data.pre_processing as pre_processing
 
-
-def get_dataset(dataset_name: str, sub_category = None) -> tp.Tuple[datasets.Dataset, str]:
+def get_dataset(dataset_name: str, sub_category=None) -> tp.Tuple[datasets.Dataset, str]:
     """Helper function to retrieve huggingface / local datasets.
 
     Args:
@@ -19,8 +17,7 @@ def get_dataset(dataset_name: str, sub_category = None) -> tp.Tuple[datasets.Dat
     """
     if sub_category is not None:
         dataset = datasets.load_dataset(dataset_name, sub_category)
-    if dataset_name == 'hpc':
-
-        dataset, target = datasets.Dataset.from_csv('./data/hpc-jobs.csv'), 'num_jobs'
+    if dataset_name == "hpc":
+        dataset, target = datasets.Dataset.from_csv("./data/hpc-jobs.csv"), "num_jobs"
 
     return dataset, target
