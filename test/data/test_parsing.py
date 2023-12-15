@@ -19,7 +19,7 @@ class TestStringRepresentationGPT2(unittest.TestCase):
     def setUp(self) -> None:
         self.tokenizer = transformers.AutoTokenizer.from_pretrained('distilgpt2')
         set_padding_or_none(self.tokenizer)
-        hpc_dataset, target = get_dataset('hpc')
+        hpc_dataset, target = get_dataset('hpc', path='../data/hpc-jobs.csv')
         self.hpc_dataset = hpc_dataset
         self.target = target
 
