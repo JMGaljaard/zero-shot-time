@@ -2,6 +2,7 @@ import typing as tp
 
 import numpy as np
 
+
 class Scaler:
     """Scaler class according to LLMTime paper. Note that this scaler should be fitted on the Training dataset, as
     otherwise knowledge is leaked.
@@ -10,11 +11,12 @@ class Scaler:
         inverse_transform (Callable): Function to apply inverse to array-like to re-construct values.
     """
 
-    def __init__(self, transform = lambda x: x, inverse_transform = lambda x: x):
+    def __init__(self, transform=lambda x: x, inverse_transform=lambda x: x):
         self.transform: tp.Callable[[np.array], np.array] = transform
         self.inverse_transform: tp.Callable[[np.array], np.array] = inverse_transform
 
-def get_scaler(time_series: np.array, quantile: float = 0.95, beta: float =0.3, default: bool = False):
+
+def get_scaler(time_series: np.array, quantile: float = 0.95, beta: float = 0.3, default: bool = False):
     """
     Generate a Scaler object based on given history data using curried application of scaling functions.
 
@@ -30,10 +32,13 @@ def get_scaler(time_series: np.array, quantile: float = 0.95, beta: float =0.3, 
     if default:
         # Limit quantile scaling to 0.01, to prevent `float('inf')`
         local_q = max(np.quantile(np.abs(time_series), q=quantile).item(), 0.01)
+
         def transform(x):
             return x / local_q
+
         def inverse_transform(x):
             return x * local_q
+
     else:
         local_min = np.min(time_series) - beta * (np.max(time_series) - np.min(time_series))
         local_q = np.quantile(time_series - local_min, q=quantile)
@@ -48,4 +53,4 @@ def get_scaler(time_series: np.array, quantile: float = 0.95, beta: float =0.3, 
         def inverse_transform(x):
             return x * local_q + local_min
 
-    return Scaler(transform=transform, inv_transform=inverse_transform)
+    return Scaler(transform=transform, inverse_transform=inverse_transform)

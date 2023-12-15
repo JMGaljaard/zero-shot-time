@@ -1,17 +1,17 @@
-import logging
 import typing as tp
 
 import numpy as np
 import torch
 import transformers
 from sklearn.base import TransformerMixin
-from sklearn.preprocessing import MinMaxScaler
 from transformers import BatchEncoding
 
 import datasets
 
+from zero_shot_time.data.scaler import Scaler, get_scaler
 
-def pre_process_values(values, **scaler_kwargs):
+
+def pre_process_llm_values(values, **scaler_kwargs):
     """Helper function to apply a scaler to a time-series, to map values within a specific range. By default, this
         processing function will apply a `MinMaxScaler` to the data, to map the values to the domain (0, 1).
 
@@ -25,21 +25,22 @@ def pre_process_values(values, **scaler_kwargs):
 
 
     """
-    logging.warning(
-        "Calling the pre_process_values function with a complete timeseries may leak information about the"
-        "future. To prevent leakage of information, only provide the values till the point that you want to"
-        "start generating from."
-    )
-    scaler = MinMaxScaler(**scaler_kwargs)
-    scaler.fit(values[:, None])
+    scaler: Scaler = get_scaler(values, **scaler_kwargs)
 
-    transformed_values = scaler.transform(values[:, None])
+    transformed_values = scaler.transform(values)
 
     return scaler, transformed_values.flatten()
 
 
 def convert_timeseries_to_fixed_precision(
-    dataset: datasets.Dataset, tokenizer: transformers.PreTrainedTokenizerFast, target: str, precision: int = 5
+    dataset: datasets.Dataset,
+        tokenizer: transformers.PreTrainedTokenizerFast,
+        values: tp.Optional[np.array] = None,
+        target: str = 'target',
+        precision: int = 5,
+        pre_processor: tp.Optional[tp.Callable] = None,
+        seperator: str = ' ,',
+        **pre_processor_kwargs
 ) -> (TransformerMixin, np.array, torch.LongTensor):
     """Helper function to convert a time-series dataset (split) from numerical representation to a fixed precision
     representation.
@@ -48,14 +49,19 @@ def convert_timeseries_to_fixed_precision(
         dataset (Dataset): Huggingface (compatible) dataset of a time series (split).
         target (str): Target (column) name of which to convert to a specific timeseries.
         precision (int): Number of precision tokens to use.
+        pre_processor (tp.Optional[tp.Callable]): Optional pre-processor in case a pre-fitted scaler is to be used.
     """
-    values = dataset[target]
+    if values is None:
+        values = dataset[target]
 
-    pre_processor, pre_processed_values = pre_process_values(np.array(values))
+    if pre_processor is None:
+        pre_processor, pre_processed_values = pre_process_llm_values(np.array(values), **pre_processor_kwargs)
+    else:
+        pre_processor, pre_processed_values = pre_processor, pre_processor.transform(np.array(values))
     _, stringified_values = stringify_values(
-        pre_processed_values, precision=precision, value_mapper=map_substring_to_tokens
+        pre_processed_values, precision=precision,value_mapper=map_substring_to_tokens
     )
-    time_series_tokens = tokenize_values(stringified_values, tokenizer)
+    time_series_tokens = tokenize_values(stringified_values, tokenizer,  seperator=seperator)
 
     return pre_processor, pre_processed_values, time_series_tokens
 
@@ -120,7 +126,7 @@ def stringify_values(
 
 
 def tokenize_values(
-    values: tp.Union[tp.List[tp.List[str]]], tokenizer: transformers.PreTrainedTokenizerFast, seperator: str = ", "
+    values: tp.Union[tp.List[tp.List[str]]], tokenizer: transformers.PreTrainedTokenizerFast, seperator: int = ' ,'
 ):
     """Helper function to convert stringified values to input_ids for a (pre-trained) autoregressive LLM. Requires
     the PADDING ID to be set of the tokenizer (e.g. the EOS token of the model, if no PAD ID is set).
