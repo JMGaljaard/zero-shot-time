@@ -5,21 +5,23 @@ from transformers.generation.utils import GenerateOutput
 
 
 def calculate_negative_log_likelihood(
-    model: transformers.GPT2Model,
+    model: transformers.PreTrainedModel,
     input_token_ids: torch.LongTensor,
     target_token_ids: torch.LongTensor,
     separator_token_id: int,
     padding_token_id: int,
-    logits_warper: LogitsWarper,
-    generation_config: transformers.GenerationConfig,
     token_mask: torch.BoolTensor,
     dy_dx: float,
     precision: int = 3,
     base: int = 10,
+    temperature: float = 0.7
 ):
     """
     Calculate the Negative Log-Likelihood (NLL) per dimension using the output logits of a Language Model (LM)
     as conditional probability.
+
+    This function curries the application of the acutal objective, so that hyper-parameters can be 'provided' outside
+    of calling the optimization function!
 
     Args:
         model (transformers.GPT2Model): Language Model to perform predictions with.
@@ -33,45 +35,49 @@ def calculate_negative_log_likelihood(
         dy_dx (float): Derivative (intercept) of scaling function, this can be calculated with JAX.
         precision (int, optional): Precision of the calculation. Defaults to 3.
         base (int, optional): Base for logarithmic calculations. Defaults to 10.
-
+        temperature (float): Temperature to scale distribution of logits (hyper-parameter).
     Returns:
         float: Calculated Negative Log-Likelihood (NLL) per dimension.
     """
 
-    assert torch.all(input_token_ids[:,-1] == separator_token_id), 'Provided input requires to end with seperator' \
-                                                                   ' before concatenating'
-
-    full_series = torch.concat([input_token_ids, target_token_ids], dim=1)
+    assert torch.all(input_token_ids[-1] == separator_token_id), (
+        "Provided input requires to end with seperator" " before concatenating"
+    )
+    assert torch.all(target_token_ids[[0, -1]] != separator_token_id), {
+        "Provided targets should not start with seperator! Check your encoding schema!"
+    }
+    full_series = torch.concat([input_token_ids, target_token_ids], dim=0)
     # TODO: Ensure that hyper-parameters are set in a logits warper list.
 
-    # Use generate function to return
-    response: GenerateOutput = model.generate(
-        input_token_ids=full_series,
-        max_new_tokens=0,
-        scores=True,
-        generation_config=generation_config
-    )
+    # Use generatino function to compute logits scores on input 'prompt'. leverage max_new_tokens=0 to effectively
+    #   perform a forward with the underlying model.
+    with torch.no_grad():
+        # Grads shall not pass!
+        response: GenerateOutput = model.forward(
+            full_series.unsqueeze(0),            # Get whole series, create 'virtual batch'
+        )
+        # TODO: Check wether we have to re-scale by the temperature.
+        logits = response.logits / temperature
+        # Set logits to -100 (ignore) for dissallowed tokens
+        logits[0, token_mask[None, :].repeat(logits.size(1), 1)] = -100
+        # get log probabilties over output dimension, skip the EOS token, get only the required values
+        logp_num_tokens = torch.log_softmax(logits, dim=-1)[0, torch.arange(len(full_series)), full_series]
 
-    logits = response.scores
-    # Set logits to -100 (ignore) for dissallowed tokens
-    logits[token_mask] = -100.0
+        # Get sequence length
+        history_len = len(input_token_ids)
 
-    # get log probabilties over output dimension, skip the EOS token
-    logp_num_tokens = torch.log_softmax(logits, dim=-1)[0, :-1, token_mask]
+        # Take only the future / predictions tokens into account.
+        logp_future_tokens = logp_num_tokens[history_len:]
 
-    # Get sequence length
-    history_len = input_token_ids.size(1)
+        base_nll = -logp_future_tokens.sum() / len(target_token_ids)
 
-    # Take only the future / predictions tokens into account.
-    logp_future_tokens = logp_num_tokens[history_len:]
+        # Average is equal to the product itself
+        bin_offset = -precision * torch.log(torch.tensor(base, device=model.device, dtype=torch.float32))
 
-    base = - logp_future_tokens.sum() / len(target_token_ids)
-    bin_offset = - precision * torch.log(torch.tensor(base, device='cuda'))
+        # Calculate component to map back to feature space.
+        scaling_offset = -torch.log(torch.tensor(dy_dx, device=model.device, dtype=torch.float32))
 
-    # Calculate component to map back to feature space.
-    scaling_offset = - torch.log(torch.tensor(dy_dx))
+        # Add components  (they are already negative)
+        nll_res = base_nll + bin_offset + scaling_offset
 
-    # Add components  (they are already negative)
-    nll_res = base + bin_offset + scaling_offset
-
-    return nll_res
+        return nll_res
