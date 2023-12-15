@@ -1,4 +1,5 @@
 import torch
+import transformers
 from transformers import LogitsWarper, add_start_docstrings
 import typing as tp
 
@@ -67,3 +68,40 @@ class NumericalLogitsWarper(LogitsWarper):
         scores[self.mask] = -float("inf")
 
         return scores
+
+
+def get_token_masks(seperator: str, padding: str, numerical_encodings: tp.List[str], tokenizer: transformers.GPT2TokenizerFast):
+    """ Helper function to construct a mask to mask out part of the predictions' logits output. Note that
+    seperators and paddings will not be in the set of ;allowable tokesn;, i.e., they will be assigned a `1` value
+    in generated mask.
+    Args:
+        seperator ():
+        padding ():
+        numerical_encodings ():
+        tokenizer ():
+
+    Returns:
+
+    """
+    [seperator_token_id] = [None] if seperator is None else tokenizer.encode(
+        seperator,
+        add_special_tokens=False
+    )
+    [padding_token_id] = [None] if len(padding) == 0 else tokenizer.encode(
+        padding,
+        add_special_tokens=False
+    )
+
+    allowable_token_ids = tokenizer.batch_encode_plus(
+        numerical_encodings,
+        return_tensors='pt',
+        add_special_tokens=False
+    )['input_ids'].flatten()
+
+    allowable_mask = torch.ones(
+        (tokenizer.vocab_size),
+        dtype=torch.bool
+    )
+    allowable_mask[allowable_token_ids] = False
+
+    return seperator_token_id, padding_token_id, allowable_mask
