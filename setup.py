@@ -12,7 +12,8 @@ setup(
             'black==23.11.0',
             'ruff==0.1.6'
             'scikit-learn==1.3.2',
-            'parameterized'
+            'parameterized',
+            'optuna'
         ],
         url='https://github.com/JMGaljaard/zero-shot-time',
         license='',
