@@ -1,8 +1,11 @@
+import typing as tp
+
 import argparse
 import logging
 
 import transformers
 
+from zero_shot_time.generation import NumericalLogitsWarper
 from zero_shot_time.data import get_dataset, pre_processing
 from zero_shot_time.data.splits import create_train_test_split
 from zero_shot_time.generation import set_padding_or_none
@@ -93,6 +96,33 @@ def main_llm(args: argparse.Namespace) -> None:
     #   automatically done by the hyper
 
     # Step 3, generate samples
+    generation_args = {
+        'do_sample': True,          # Randomly select
+        'top_p': 0.9,               # Limit the probability to top 90%
+        'temperature': 0.7,         # Rescale factor for probability estimates
+    }
+    # Note we don't set the top_k, as we limit the ouput vocabulary using our LogitRescaler.
+    warper = NumericalLogitsWarper(
+        vocabulary_size=model.vocab_size,
+        numerical_token_ids=get_numerical_tokenids(
+            [f' {i}' for i in range(10)],
+            tokenizer),
+        padding_token_id=None,
+        seperator_token_id=get_seperator_tokenids(' ,', tokenizer),
+        device=model.device
+    )
+
+    for train_set, test_set in zip(train_sets, test_sets):
+        responses: tp.List[tp.List[tp.Any]] = generate_completions(
+            train_sets=train_set,
+            test_sets=test_set,
+            model=model,
+            logits_warper_constraint=warper,
+
+        )
+        # TODO: Filter responses to have minimum length during processing.
+
+        # TODO: Can we add streaming into the mix?
 
     # Step 4, generated samples,
     # 3. Pre-process data, and get mapping function to re-construct
@@ -106,7 +136,7 @@ def main_llm(args: argparse.Namespace) -> None:
         logging.warning("Truncating will leak information of previous states")
     print(input_ids)
 
-    warper = NumericalLogitsWarper()
+
     model.generate(inputs=input_ids, logits_processor=warper, max_length=4096)
 
     # TODO: Post-processing
@@ -115,6 +145,9 @@ def main_llm(args: argparse.Namespace) -> None:
     # TODO: Write to a file
 
     ...
+
+
+    # TODO: Do plotting and evaluation in a new set.
 
 
 if __name__ == "__main__":
