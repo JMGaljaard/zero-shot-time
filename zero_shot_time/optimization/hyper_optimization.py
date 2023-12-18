@@ -20,6 +20,7 @@ def process_sets(
         param_sets: tp.List[tp.Tuple[tp.List[np.array], tp.List[np.array]]],
         precision: int = 3,
         tokenizer: transformers.PreTrainedTokenizerFast = None,
+        drop_test_comma: bool = True,
         **scaler_kwargs
 ) -> (tp.List[torch.LongTensor], tp.List[torch.LongTensor], tp.List[Scaler]):
     """Helper function to pre-process a list of train and test sets, using the training sets to re-scale training and
@@ -28,6 +29,8 @@ def process_sets(
         param_sets (tp.L): List of lists containing pairs of training and testing sets to pre-process individually.
         precision (): Numerical precision to use during encoding of the tokenized representations after scaling.
         tokenizer (): Tokenizer (corresponding to a model) to use to perform analysis on.
+        drop_test_comma (bool, default True):
+            Optional configuration to keep last comma of test input_ids. Defaults to drop the last comma/seperator.
         **scaler_kwargs (): Keyword arguments (hyper-parameters) to pass to the scaler used during pre-processing.
 
     Returns:
@@ -47,8 +50,9 @@ def process_sets(
             None, tokenizer, values=test_set, pre_processor=scaler, precision=precision, seperator=' ,', **scaler_kwargs
         )
 
-        # Remove the last comma seperated value, as we are not going to predict futher than that
-        input_ids_test = input_ids_test[:-1]
+        if drop_test_comma:
+            # Remove the last comma seperated value, as we are not going to predict futher than that
+            input_ids_test = input_ids_test[:-1]
 
         train_sets.append(input_ids_train)
         test_sets.append(input_ids_test)
@@ -190,6 +194,8 @@ def perform_hyper_parameter_tuning(
         sampler=BruteForceSampler(seed=42),
         load_if_exists=True
     )
+
+    study
     partial_applied_search = curried_hyper_opt(
         data_sets,
         model=model,

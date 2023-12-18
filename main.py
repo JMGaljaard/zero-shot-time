@@ -1,16 +1,26 @@
+import pickle
 import typing as tp
 
 import argparse
 import logging
 
+import numpy as np
+import torch
+import tqdm
 import transformers
+from transformers import GenerationConfig
 
+from zero_shot_time.data.post_processing import convert_tokens_to_timeseries, base_transformation
+from zero_shot_time.data.scaler import Scaler
 from zero_shot_time.generation import NumericalLogitsWarper
 from zero_shot_time.data import get_dataset, pre_processing
 from zero_shot_time.data.splits import create_train_test_split
 from zero_shot_time.generation import set_padding_or_none
+from zero_shot_time.generation.generation import get_generated_completions
 from zero_shot_time.generation.numerical_logits_warper import get_token_masks
+from zero_shot_time.generation.tokenizer import get_token_ids_for_numerical
 from zero_shot_time.optimization import perform_hyper_parameter_tuning
+from zero_shot_time.optimization.hyper_optimization import process_sets
 
 
 def main_baseline(args: argparse.Namespace):
@@ -41,6 +51,75 @@ SEARCH_SPACES = {
         'beta': [0.3]
     }
 }
+
+
+def post_process_responses(
+        predictions: tp.List[tp.List[torch.LongTensor]],
+        scores: tp.List[tp.List[torch.FloatTensor]],
+        scaler: Scaler,
+        tokenizer: transformers.PreTrainedTokenizerFast,
+        mapping_function: tp.Callable,
+        seperator_id: int,
+        train_len: int,
+        test_len: int,
+        test_set_length: int) -> tp.Tuple[tp.List[tp.List[np.array]], tp.List[tp.List[np.array]]]:
+
+    """
+    Perform post-processing on model predictions and scores.
+
+    Args:
+        predictions (List[List[torch.LongTensor]]): List of lists containing model predictions.
+        scores (List[List[torch.FloatTensor]]): List of lists containing model scores.
+        scaler (Scaler): Scaler function to perform the inverse transformation.
+        test_set_length (int): Length of the test set.
+
+    Returns:
+        List[List[np.array]]: List of lists containing post-processed responses.
+
+    Example:
+        predictions, scores = get_generated_completions(
+            train_sets=train_sets_tokens,
+            test_sets=test_sets_tokens,
+            model=model,
+            logits_warper_constraint=warper,
+            generation_config=generation_config,
+            separator_token_id=sep_token_id,
+            completions=20,
+        )
+        results = post_process_responses(predictions, scores, scaler, len(test_set))
+    """
+    ret_pred = []
+    ret_score = []
+    for sample_predictions, sample_scores in zip(predictions, scores):
+        # prediction [1, pred_len]
+        # scores [1, pred_len, vocabulary]
+        sample_pred_res = []
+        sample_score_res = []
+
+        for prediction, score in zip(sample_predictions, sample_scores):
+            # Get input_ids and sc
+
+            # Create flat tensor
+            input_ids = prediction[0].reshape(-1)
+            # Drop batch dimension
+            scores = scores.squeeze(0)
+            # Get sub-tokens index using seperator to superfluous index
+            index = (input_ids == seperator_id).nonzero().squeeze()[train_len + test_len]
+            # Drop additional predictions and scores
+            input_ids = input_ids[:index]
+            # TODO: Only get relevant scores?
+            scores = scores[:index, :]
+
+            # TODO: Shouldn't we do this in the generation part?
+            scaled_representation = convert_tokens_to_timeseries(input_ids, tokenizer, mapping_function=mapping_function)
+            values = scaler.inverse_transform(scaled_representation)
+
+            sample_pred_res.append(values)
+            sample_score_res.append(scores.numpy())
+        ret_pred.append(sample_pred_res)
+        ret_score.append(sample_score_res)
+    return ret_pred, ret_score
+
 
 def main_llm(args: argparse.Namespace) -> None:
     """Main function to run LLMTime Reimplementation experiments."""
@@ -95,34 +174,61 @@ def main_llm(args: argparse.Namespace) -> None:
     # Step 2, store hyper-parameter for future reference
     #   automatically done by the hyper
 
-    # Step 3, generate samples
-    generation_args = {
-        'do_sample': True,          # Randomly select
-        'top_p': 0.9,               # Limit the probability to top 90%
-        'temperature': 0.7,         # Rescale factor for probability estimates
-    }
-    # Note we don't set the top_k, as we limit the ouput vocabulary using our LogitRescaler.
-    warper = NumericalLogitsWarper(
-        vocabulary_size=model.vocab_size,
-        numerical_token_ids=get_numerical_tokenids(
-            [f' {i}' for i in range(10)],
-            tokenizer),
-        padding_token_id=None,
-        seperator_token_id=get_seperator_tokenids(' ,', tokenizer),
-        device=model.device
+    # Step 3, add constraints to generation
+    generation_config = GenerationConfig(
+        max_new_tokens=600,                     # Limit output (default to 600 for testing)
+        do_sample=True,                         # Randomly select
+        top_k=10 + 1,                           # Only consider numerical and comma TODO: Add seperator
+        eos_token_id=model.config.eos_token_id, # EOS token (note that model is not allowed to generate this token :>
+        top_p=0.97                              # Limit to output probability of 97%
     )
 
-    for train_set, test_set in zip(train_sets, test_sets):
-        responses: tp.List[tp.List[tp.Any]] = generate_completions(
-            train_sets=train_set,
-            test_sets=test_set,
+    num_token_ids = get_token_ids_for_numerical(
+            [f' {i}' for i in range(10)],
+            tokenizer)
+    sep_token_id = get_token_ids_for_numerical(' ,', tokenizer)
+    # Note we don't set the top_k, as we limit the ouput vocabulary using our LogitRescaler.
+    # TODO: Create configuration object to reduce number of parameters everywhere
+    warper = NumericalLogitsWarper(
+        vocabulary_size=model.config.vocab_size,
+        numerical_token_ids=num_token_ids,
+        padding_token_id=None,
+        seperator_token_id=sep_token_id,
+        device=model.device
+    )
+    processed_results = []
+    # Prepare generation configuration, to set sampling on, and other samplign techniques
+    for train_set, test_set in tqdm.tqdm(zip(train_sets, test_sets)):
+        train_sets_tokens, test_sets_tokens, [scaler] = process_sets(
+            [(train_set, test_set)],
+            precision=best_nll_parameters['precision'],
+            tokenizer=tokenizer,  #
+            quantile=best_nll_parameters['alpha'],
+            beta=best_nll_parameters['beta'],
+        )
+        # Generate multiple responses for each item
+        predictions: tp.List[tp.List[torch.LongTensor]]
+        scores: tp.List[tp.List[torch.FloatTensor]]
+        predictions, scores = get_generated_completions(
+            train_sets=train_sets_tokens,
+            test_sets=test_sets_tokens,
             model=model,
             logits_warper_constraint=warper,
-
+            generation_config=generation_config,
+            seperator_token_id=sep_token_id,
+            completions=20,
         )
+
+
+        results: tp.List[tp.List[np.array]] = post_process_responses(predictions, scores, scaler, len(test_set))
+
+        processed_results.append(results)
         # TODO: Filter responses to have minimum length during processing.
 
         # TODO: Can we add streaming into the mix?
+    with open('data.pickle', 'wb') as f:
+        # Pickle the 'data' dictionary using the highest protocol available.
+        pickle.dump(results, f, pickle.HIGHEST_PROTOCOL)
 
     # Step 4, generated samples,
     # 3. Pre-process data, and get mapping function to re-construct
@@ -137,7 +243,6 @@ def main_llm(args: argparse.Namespace) -> None:
     print(input_ids)
 
 
-    model.generate(inputs=input_ids, logits_processor=warper, max_length=4096)
 
     # TODO: Post-processing
     ...
