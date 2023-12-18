@@ -16,7 +16,9 @@ setup(
             'optuna',
             'scikit-learn',
             'jax',
-            'jaxlib'
+            'jaxlib',
+            'accelerate',
+            'bitsandbytes'
         ],
         url='https://github.com/JMGaljaard/zero-shot-time',
         license='',
