@@ -1,4 +1,3 @@
-import copy
 import typing as tp
 
 import jax
@@ -21,6 +20,8 @@ def process_sets(
         precision: int = 3,
         tokenizer: transformers.PreTrainedTokenizerFast = None,
         drop_test_comma: bool = True,
+        seperator=None,
+        form: str = ' {}',
         **scaler_kwargs
 ) -> (tp.List[torch.LongTensor], tp.List[torch.LongTensor], tp.List[Scaler]):
     """Helper function to pre-process a list of train and test sets, using the training sets to re-scale training and
@@ -43,11 +44,11 @@ def process_sets(
     for train_set, test_set in param_sets:
         # 1. Pre-process training and compute scaling object (prevent knowledge leakage through scaling
         scaler, process_values_train, input_ids_train = pre_processing.convert_timeseries_to_fixed_precision(
-            None, tokenizer, values=train_set, precision=precision, seperator=' ,', **scaler_kwargs
+            None, tokenizer, values=train_set, precision=precision, seperator=seperator, form=form, **scaler_kwargs
         )
         # 2. Pre-process test and re-use scaling so tha
         _, process_values_test, input_ids_test = pre_processing.convert_timeseries_to_fixed_precision(
-            None, tokenizer, values=test_set, pre_processor=scaler, precision=precision, seperator=' ,', **scaler_kwargs
+            None, tokenizer, values=test_set, pre_processor=scaler, precision=precision, seperator=seperator, form=form, **scaler_kwargs
         )
 
         if drop_test_comma:
@@ -67,6 +68,8 @@ def curried_hyper_opt(
     tokenizer: transformers.PreTrainedTokenizerFast,
     allowable_tokens_mask: torch.BoolTensor,
     seperator_token_id: int,
+    seperator: str,
+    form: str,
     padding_token_id: int,
     alpha: tp.List[float] = None,
     beta: tp.List[float] = None,
@@ -100,7 +103,6 @@ def curried_hyper_opt(
     tau_grid = tau
 
     # TODO: Check if precision requires actual evaluation, as in general longer sequences tend to have higher logits.
-    assert len(tau) == 1, "Curently we only support working "
     def llm_hyper_opt(
             trial: Trial
     ) -> float:
@@ -145,6 +147,8 @@ def curried_hyper_opt(
             tokenizer=tokenizer,                                #
             quantile=alpha,                                        # Scaler alpha
             beta=beta,                                          # Scaler beta
+            seperator=seperator,
+            form=form,
         )
 
         # 3. Calculate NLL statistic on pre-processed data.
@@ -166,8 +170,6 @@ def curried_hyper_opt(
                 base=10,
                 temperature=tau
             )
-            dy_dx = 1       # TODO: compute from scaler with jax
-
             nll_aggregate += nll_
         # Return the average nll score to the caller for hyper-parameter optimization.
         return nll_aggregate / len(train_eval_sets)
@@ -185,11 +187,13 @@ def perform_hyper_parameter_tuning(
         data_sets: tp.List[tp.List[tp.Tuple[np.array, np.array]]],
         allowable_token_mask: torch.BoolTensor,
         seperator_token_id: int,
+        seperator: str,
+        form: str,
         padding_token_id: int,
         search_space: dict[str, tp.List[tp.Any]],
-    ) -> Study:
+) -> Study:
     name = f"{dataset_name}_{model_name}"
-    storage = f"sqlite:///{name}.db"
+    storage = f"sqlite:///{name.split('/')[-1]}.db"
     study = optuna.create_study(
         study_name=name,
         storage=storage,
@@ -202,8 +206,10 @@ def perform_hyper_parameter_tuning(
         train_eval_sets=data_sets,
         model=model,
         tokenizer=tokenizer,
+        seperator=seperator,
         allowable_tokens_mask=allowable_token_mask,
         seperator_token_id=seperator_token_id,
+        form=form,
         padding_token_id=padding_token_id,
         alpha=search_space['alpha'],
         beta=search_space['beta'],

@@ -15,7 +15,7 @@ def get_generated_completions(
         seperator_token_id: int = None,
         attempts = 3,
         numerical_token_mask: torch.BoolTensor = None,
-        parallel = False
+        parallel: int = 1
 ) -> tp.Tuple[tp.List[tp.List[torch.LongTensor]], tp.List[tp.List[torch.FloatTensor]]]:
     """Generate completions for a train-set dataset based on a given model.
 
@@ -47,14 +47,17 @@ def get_generated_completions(
         min_samples = torch.sum(torch.cat([train_set, test_set]) == seperator_token_id) - 1
         prediction = []
         score = []
-        for _ in range(attempts):
+        for _ in range(attempts * completions // parallel):
             if len(prediction) >= completions:
                 break
+            train_view = train_set.view(1, train_set.size(-1))
+
+
             # Create parallel responses
             response = model.generate(
-                input_ids=train_set.view(1, train_set.size(-1)).repeat(
-                        (to_gen, 1)
-                ),
+                input_ids=train_view,
+                num_return_sequences=min(parallel, to_gen),
+                attention_mask = torch.ones_like(train_view),
                 generation_config=generation_config,
                 logits_processor=transformers.LogitsProcessorList([
                     logits_warper_constraint
@@ -70,7 +73,8 @@ def get_generated_completions(
                     score.append(local_scores[:, samp_indx].detach().to('cpu'))
                 else:
                     logging.warning(
-                            f"Generated insufficient samples! Required: {min_samples.item()} but got: {sample.item()}")
+                            f"Generated insufficient samples! Required: {min_samples.item()} but got: {sample.item()}!"
+                            f"If you see this many times, you may want to increase the context-length")
             to_gen = completions - len(prediction)
             if to_gen == 0:
                 break

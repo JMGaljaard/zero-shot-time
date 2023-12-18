@@ -1,3 +1,4 @@
+import os
 import pickle
 import typing as tp
 
@@ -36,7 +37,13 @@ SEARCH_SPACES = {
         'alpha': [0.5, 0.7, 0.9, 0.99],
         'beta': [0.0, 0.14, 0.3, 0.5]
     },
-    'llama7b': {
+    'gpt2': {
+        'precision': [2, 3],
+        'tau': [0.7],
+        'alpha': [0.5, 0.7, 0.9, 0.99],
+        'beta': [0.0, 0.14, 0.3, 0.5]
+    },
+    'meta-llama/Llama-2-7b-hf': {
         'precision': [3],
         'nucleus': [0.9],
         'tau': [0.2, 0.4, 0.6, 0.8],
@@ -138,10 +145,19 @@ def main_llm(args: argparse.Namespace) -> None:
     truncation = args.truncate
 
     # 1.1 Load model (note the causal lm !)
-    model: transformers.GPT2Model = transformers.AutoModelForCausalLM.from_pretrained(model_name)
-    model.to('cuda')
-    # 1.2.1 Load and initialize the models' tokenizer and prepare tokenizer for batch-encoding plus.
-    tokenizer = transformers.GPT2TokenizerFast.from_pretrained("distilgpt2")
+
+
+    if 'gpt' in model_name:
+        model: transformers.GPT2Model = transformers.AutoModelForCausalLM.from_pretrained(
+                model_name)
+        model.to('cuda')
+        # 1.2.1 Load and initialize the models' tokenizer and prepare tokenizer for batch-encoding plus.
+        tokenizer = transformers.GPT2TokenizerFast.from_pretrained(model_name, token=os.getenv('HF_TOKEN'))
+    else:
+        transformers.AutoModelForCausalLM.from_pretrained(
+                model_name, device_map='auto')
+        tokenizer = transformers.LlamaTokenizerFast.from_pretrained(model_name, token=os.getenv('HF_TOKEN'))
+
     # 1.2.2 In case the fast-tokenizer has no padding, set the padding manually
     set_padding_or_none(tokenizer, set_padding="eos")
 
@@ -156,13 +172,14 @@ def main_llm(args: argparse.Namespace) -> None:
         logging.warning("Truncating before pre-processing will affect the 'range' of the scaled values!")
         # TODO: Implement maximum length split.
 
+    seperator = ' ,' if 'gpt' in model_name else ','
+    number_repr = [f' {i}' for i in range(10)] if 'gpt' in model_name else [f'{i}' for i in range(10)]
+    form = ' {}' if 'gpt' in model_name else '{}'
     # TODO: beter document / configure the usage of different encoding strategies.
     seperator_token_id, parameter_token_id, numerical_token_mask = get_token_masks(
-        seperator = ' ,',
+        seperator = ',',
         padding = '',
-        numerical_encodings = [
-            f" {i}" for i in range(0, 10)
-        ],
+        numerical_encodings = number_repr,
         tokenizer=tokenizer
     )
 
@@ -175,8 +192,10 @@ def main_llm(args: argparse.Namespace) -> None:
         data_sets=param_sets,
         allowable_token_mask=numerical_token_mask,
         seperator_token_id=seperator_token_id,
+        seperator=seperator,
         padding_token_id=parameter_token_id,
-        search_space=SEARCH_SPACES[model_name]
+        search_space=SEARCH_SPACES[model_name],
+        form=form,
     )
 
     best_nll_parameters = study.best_params
@@ -189,13 +208,14 @@ def main_llm(args: argparse.Namespace) -> None:
         do_sample=True,                         # Randomly select
         top_k=10 + 1,                           # Only consider numerical and comma TODO: Add seperator
         eos_token_id=model.config.eos_token_id, # EOS token (note that model is not allowed to generate this token :>
-        top_p=0.97,                             # Limit to output probability of 97%
+        # top_p=0.97,                             # Limit to output probability of 97%
         return_dict_in_generate=True,           # Ensure that we can retrieve scores in deocidng results
-        output_scores=True                      # Ensure that we don;t discard scored after decoding
+        output_scores=True,                      # Ensure that we don;t discard scored after decoding
+        temperature=best_nll_parameters['tau']
     )
 
     num_token_ids = get_token_ids_for_numerical(
-            [f' {i}' for i in range(10)],
+            number_repr,
             tokenizer)
     sep_token_id = get_token_ids_for_numerical(' ,', tokenizer)
     # Note we don't set the top_k, as we limit the ouput vocabulary using our LogitRescaler.
@@ -210,13 +230,18 @@ def main_llm(args: argparse.Namespace) -> None:
     processed_results = []
     # Prepare generation configuration, to set sampling on, and other samplign techniques
     for train_set, test_set in tqdm.tqdm(zip(train_sets, test_sets), total=len(train_sets)):
+        torch.cuda.empty_cache()
         train_sets_tokens, test_sets_tokens, [scaler] = process_sets(
             [(train_set, test_set)],
             precision=best_nll_parameters['precision'],
             tokenizer=tokenizer,  #
             quantile=best_nll_parameters['alpha'],
             beta=best_nll_parameters['beta'],
+            seperator=seperator,
+            form=form,
         )
+        # TODO: Determine whether or not the model should be restricted to generate with
+
         # Generate multiple responses for each item
         predictions: tp.List[tp.List[torch.LongTensor]]
         scores: tp.List[tp.List[torch.FloatTensor]]
@@ -229,6 +254,7 @@ def main_llm(args: argparse.Namespace) -> None:
             seperator_token_id=sep_token_id,
             numerical_token_mask=numerical_token_mask,
             completions=20,
+            parallel=20,
         )
 
 
@@ -249,7 +275,7 @@ def main_llm(args: argparse.Namespace) -> None:
         # TODO: Can we add streaming into the mix?
     with open('data.pickle', 'wb') as f:
         # Pickle the 'data' dictionary using the highest protocol available.
-        pickle.dump(results, f, pickle.HIGHEST_PROTOCOL)
+        pickle.dump(processed_results, f, pickle.HIGHEST_PROTOCOL)
 
     # Step 4, generated samples,
     # 3. Pre-process data, and get mapping function to re-construct
@@ -278,7 +304,8 @@ def main_llm(args: argparse.Namespace) -> None:
 
 if __name__ == "__main__":
     default_max_history = 400
-    default_model = "distilgpt2"
+    # default_model = "meta-llama/Llama-2-7b-hf"
+    default_model = 'gpt2'
     default_dataset = "hpc"
     default_subcat = None
     default_truncate = "before"

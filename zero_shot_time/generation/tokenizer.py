@@ -31,12 +31,12 @@ tp.Union[int, tp.List[int]]:
             If the input is a list of strings, returns a list of corresponding token ids.
     """
     if isinstance(tokens, str):
-        return tokenizer.encode(tokens)[0]
+        return tokenizer.encode_plus(tokens, add_special_tokens=False)['input_ids'][-1]
     elif isinstance(tokens, tp.List):
         if hasattr(tokenizer, 'batch_encode_plus'):
             return [
-                token[0]
-                for token in tokenizer.batch_encode_plus(tokens)['input_ids']
+                token[-1]
+                for token in tokenizer.batch_encode_plus(tokens, add_special_tokens=False)['input_ids']
             ]
         else:
             return [

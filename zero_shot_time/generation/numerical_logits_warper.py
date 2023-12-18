@@ -83,20 +83,20 @@ def get_token_masks(seperator: str, padding: str, numerical_encodings: tp.List[s
     Returns:
 
     """
-    [seperator_token_id] = [None] if seperator is None else tokenizer.encode(
+    seperator_token_id = None if seperator is None else tokenizer.encode(
         seperator,
         add_special_tokens=False
-    )
-    [padding_token_id] = [None] if len(padding) == 0 else tokenizer.encode(
+    )[-1]
+    padding_token_id = None if len(padding) == 0 else tokenizer.encode(
         padding,
         add_special_tokens=False
-    )
+    )[-1]
 
     allowable_token_ids = tokenizer.batch_encode_plus(
         numerical_encodings,
         return_tensors='pt',
         add_special_tokens=False
-    )['input_ids'].flatten()
+    )['input_ids'][:, -1].flatten()
 
     allowable_mask = torch.ones(
         (tokenizer.vocab_size),
