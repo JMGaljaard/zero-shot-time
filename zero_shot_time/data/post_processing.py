@@ -57,7 +57,9 @@ def convert_tokens_to_timeseries(
     texts = tokenizer.decode(token_ids)
 
     # 2. Split values to individual samples
-    string_values = texts.split(delim)
+    # For specific edge case, we need to strip delimiter
+    string_values = [text.strip(delim) for text in texts.split(delim)]
+
 
     # 3. Convert values to values
     # TODO: Properly handle invalid values

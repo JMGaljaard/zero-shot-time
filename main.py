@@ -61,8 +61,7 @@ def post_process_responses(
         mapping_function: tp.Callable,
         seperator_id: int,
         train_len: int,
-        test_len: int,
-        test_set_length: int) -> tp.Tuple[tp.List[tp.List[np.array]], tp.List[tp.List[np.array]]]:
+        test_len: int) -> tp.Tuple[tp.List[tp.List[np.array]], tp.List[tp.List[np.array]]]:
 
     """
     Perform post-processing on model predictions and scores.
@@ -100,22 +99,32 @@ def post_process_responses(
             # Get input_ids and sc
 
             # Create flat tensor
-            input_ids = prediction[0].reshape(-1)
+            input_ids = prediction
             # Drop batch dimension
-            scores = scores.squeeze(0)
-            # Get sub-tokens index using seperator to superfluous index
-            index = (input_ids == seperator_id).nonzero().squeeze()[train_len + test_len]
+            score = score.squeeze(0)
+            # Get sub-tokens index using seperator to superfluous index (
+            indices = (input_ids == seperator_id).nonzero().squeeze()
+            # Require n - 1 seperators to compute
+            if len(indices) >= (train_len + test_len - 1):
+                temp = train_len + test_len - 1
+                if temp >= len(indices):
+                    index = -1
+                else:
+                    index = indices[train_len + test_len - 1]
+            else:
+                # Otherwise there are no super-flo=uous tokens, i.e. just long enough
+                index = -1
             # Drop additional predictions and scores
             input_ids = input_ids[:index]
             # TODO: Only get relevant scores?
-            scores = scores[:index, :]
+            score = score[:, :index, ]
 
             # TODO: Shouldn't we do this in the generation part?
             scaled_representation = convert_tokens_to_timeseries(input_ids, tokenizer, mapping_function=mapping_function)
             values = scaler.inverse_transform(scaled_representation)
 
             sample_pred_res.append(values)
-            sample_score_res.append(scores.numpy())
+            sample_score_res.append(score.numpy())
         ret_pred.append(sample_pred_res)
         ret_score.append(sample_score_res)
     return ret_pred, ret_score
@@ -130,7 +139,7 @@ def main_llm(args: argparse.Namespace) -> None:
 
     # 1.1 Load model (note the causal lm !)
     model: transformers.GPT2Model = transformers.AutoModelForCausalLM.from_pretrained(model_name)
-
+    model.to('cuda')
     # 1.2.1 Load and initialize the models' tokenizer and prepare tokenizer for batch-encoding plus.
     tokenizer = transformers.GPT2TokenizerFast.from_pretrained("distilgpt2")
     # 1.2.2 In case the fast-tokenizer has no padding, set the padding manually
@@ -173,14 +182,16 @@ def main_llm(args: argparse.Namespace) -> None:
     best_nll_parameters = study.best_params
     # Step 2, store hyper-parameter for future reference
     #   automatically done by the hyper
-
+    mapping_function =  base_transformation(precision=best_nll_parameters['precision'])
     # Step 3, add constraints to generation
     generation_config = GenerationConfig(
         max_new_tokens=600,                     # Limit output (default to 600 for testing)
         do_sample=True,                         # Randomly select
         top_k=10 + 1,                           # Only consider numerical and comma TODO: Add seperator
         eos_token_id=model.config.eos_token_id, # EOS token (note that model is not allowed to generate this token :>
-        top_p=0.97                              # Limit to output probability of 97%
+        top_p=0.97,                             # Limit to output probability of 97%
+        return_dict_in_generate=True,           # Ensure that we can retrieve scores in deocidng results
+        output_scores=True                      # Ensure that we don;t discard scored after decoding
     )
 
     num_token_ids = get_token_ids_for_numerical(
@@ -198,7 +209,7 @@ def main_llm(args: argparse.Namespace) -> None:
     )
     processed_results = []
     # Prepare generation configuration, to set sampling on, and other samplign techniques
-    for train_set, test_set in tqdm.tqdm(zip(train_sets, test_sets)):
+    for train_set, test_set in tqdm.tqdm(zip(train_sets, test_sets), total=len(train_sets)):
         train_sets_tokens, test_sets_tokens, [scaler] = process_sets(
             [(train_set, test_set)],
             precision=best_nll_parameters['precision'],
@@ -216,11 +227,21 @@ def main_llm(args: argparse.Namespace) -> None:
             logits_warper_constraint=warper,
             generation_config=generation_config,
             seperator_token_id=sep_token_id,
+            numerical_token_mask=numerical_token_mask,
             completions=20,
         )
 
 
-        results: tp.List[tp.List[np.array]] = post_process_responses(predictions, scores, scaler, len(test_set))
+        results: tp.List[tp.List[np.array]] = post_process_responses(
+                predictions=predictions,
+                scores=scores,
+                scaler=scaler,
+                tokenizer=tokenizer,
+                mapping_function=mapping_function,
+                train_len=len(train_set),
+                test_len=len(test_set),
+                seperator_id=seperator_token_id
+        )
 
         processed_results.append(results)
         # TODO: Filter responses to have minimum length during processing.

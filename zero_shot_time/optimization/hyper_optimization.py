@@ -54,13 +54,14 @@ def process_sets(
             # Remove the last comma seperated value, as we are not going to predict futher than that
             input_ids_test = input_ids_test[:-1]
 
-        train_sets.append(input_ids_train)
-        test_sets.append(input_ids_test)
+        train_sets.append(input_ids_train.to('cuda'))
+        test_sets.append(input_ids_test.to('cuda'))
         hyper_scalers.append(scaler)
 
     return train_sets, test_sets, hyper_scalers
 
 def curried_hyper_opt(
+    study: Study,
     train_eval_sets: tp.List[tp.Tuple[np.array, np.array]],
     model: transformers.PreTrainedModel,
     tokenizer: transformers.PreTrainedTokenizerFast,
@@ -92,6 +93,7 @@ def curried_hyper_opt(
 
     """
     # Store hyper-parameters locally
+    local_study = study
     alpha_grid = alpha
     beta_grid = beta
     precision_grid = precision
@@ -125,6 +127,7 @@ def curried_hyper_opt(
         # Retrieve random selection to perform evaluation on.
         tau = trial.suggest_categorical(name='tau',
                                         choices=tau_grid)
+
         alpha = trial.suggest_categorical('alpha',
                                           choices=alpha_grid)
 
@@ -132,7 +135,6 @@ def curried_hyper_opt(
                                          choices=beta_grid)
         precision = trial.suggest_categorical('precision',
                                               choices=precision_grid)
-
 
         # 1. Create tokenized representation
 
@@ -195,9 +197,9 @@ def perform_hyper_parameter_tuning(
         load_if_exists=True
     )
 
-    study
     partial_applied_search = curried_hyper_opt(
-        data_sets,
+        study=study,
+        train_eval_sets=data_sets,
         model=model,
         tokenizer=tokenizer,
         allowable_tokens_mask=allowable_token_mask,
@@ -209,6 +211,6 @@ def perform_hyper_parameter_tuning(
         tau=search_space['tau'],
     )
     # Because we peform brute-force search, we don't specify number of trails.
-    study.optimize(partial_applied_search)
+    # study.optimize(partial_applied_search)
 
     return study

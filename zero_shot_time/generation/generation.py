@@ -14,6 +14,7 @@ def get_generated_completions(
         completions: int = 20,
         seperator_token_id: int = None,
         attempts = 3,
+        numerical_token_mask: torch.BoolTensor = None,
         parallel = False
 ) -> tp.Tuple[tp.List[tp.List[torch.LongTensor]], tp.List[tp.List[torch.FloatTensor]]]:
     """Generate completions for a train-set dataset based on a given model.
@@ -40,27 +41,40 @@ def get_generated_completions(
     """
     predictions = []
     scores = []
-
+    to_gen = completions
     # TODO: Implement parallel decoding :)
     for train_set, test_set in zip(train_sets, test_sets):
         min_samples = torch.sum(torch.cat([train_set, test_set]) == seperator_token_id) - 1
         prediction = []
         score = []
-        for _ in range(attempts * completions):
+        for _ in range(attempts):
             if len(prediction) >= completions:
                 break
+            # Create parallel responses
             response = model.generate(
-                inputs=train_set.view(1, train_set.size(-1)),
+                input_ids=train_set.view(1, train_set.size(-1)).repeat(
+                        (to_gen, 1)
+                ),
                 generation_config=generation_config,
                 logits_processor=transformers.LogitsProcessorList([
                     logits_warper_constraint
                 ])
             )
-            if (samples:= torch.sum(response.data == seperator_token_id)) >= min_samples:
-                prediction.append(response.data.detach().to('cpu'))
-                score.append(response.scores.detach().to('cpu'))
-            else:
-                logging.warning(f"Generated insufficient samples! Required: {min_samples.item()} but got: {samples.item()}")
+            local_scores = torch.stack([
+                score[:, ~numerical_token_mask]
+                for score in response.scores
+            ]).to('cpu')
+            for samp_indx in range(response.sequences.size(0)):
+                if (sample := torch.sum(response.sequences[samp_indx] == seperator_token_id)) >= min_samples:
+                    prediction.append(response.sequences[samp_indx].detach().to('cpu'))
+                    score.append(local_scores[:, samp_indx].detach().to('cpu'))
+                else:
+                    logging.warning(
+                            f"Generated insufficient samples! Required: {min_samples.item()} but got: {sample.item()}")
+            to_gen = completions - len(prediction)
+            if to_gen == 0:
+                break
         predictions.append(prediction)
+        scores.append(score)
 
     return predictions, scores

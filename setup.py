@@ -13,7 +13,10 @@ setup(
             'ruff==0.1.6'
             'scikit-learn==1.3.2',
             'parameterized',
-            'optuna'
+            'optuna',
+            'scikit-learn',
+            'jax',
+            'jaxlib'
         ],
         url='https://github.com/JMGaljaard/zero-shot-time',
         license='',
