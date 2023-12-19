@@ -67,6 +67,7 @@ def post_process_responses(
         tokenizer: transformers.PreTrainedTokenizerFast,
         mapping_function: tp.Callable,
         seperator_id: int,
+        seperator: str,
         train_len: int,
         test_len: int) -> tp.Tuple[tp.List[tp.List[np.array]], tp.List[tp.List[np.array]]]:
 
@@ -112,12 +113,12 @@ def post_process_responses(
             # Get sub-tokens index using seperator to superfluous index (
             indices = (input_ids == seperator_id).nonzero().squeeze()
             # Require n - 1 seperators to compute
-            if len(indices) >= (train_len + test_len - 1):
-                temp = train_len + test_len - 1
+            if len(indices) >= (test_len - 1):
+                temp = test_len - 1
                 if temp >= len(indices):
                     index = -1
                 else:
-                    index = indices[train_len + test_len - 1]
+                    index = indices[test_len - 1]
             else:
                 # Otherwise there are no super-flo=uous tokens, i.e. just long enough
                 index = -1
@@ -127,7 +128,7 @@ def post_process_responses(
             score = score[:, :index, ]
 
             # TODO: Shouldn't we do this in the generation part?
-            scaled_representation = convert_tokens_to_timeseries(input_ids, tokenizer, mapping_function=mapping_function)
+            scaled_representation = convert_tokens_to_timeseries(input_ids, tokenizer, mapping_function=mapping_function, seperator=seperator)
             values = scaler.inverse_transform(scaled_representation)
 
             sample_pred_res.append(values)
@@ -154,8 +155,8 @@ def main_llm(args: argparse.Namespace) -> None:
         # 1.2.1 Load and initialize the models' tokenizer and prepare tokenizer for batch-encoding plus.
         tokenizer = transformers.GPT2TokenizerFast.from_pretrained(model_name, token=os.getenv('HF_TOKEN'))
     else:
-        transformers.AutoModelForCausalLM.from_pretrained(
-                model_name, device_map='auto')
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+                model_name, device_map='auto', torch_dtype=torch.float16)
         tokenizer = transformers.LlamaTokenizerFast.from_pretrained(model_name, token=os.getenv('HF_TOKEN'))
 
     # 1.2.2 In case the fast-tokenizer has no padding, set the padding manually
@@ -177,7 +178,7 @@ def main_llm(args: argparse.Namespace) -> None:
     form = ' {}' if 'gpt' in model_name else '{}'
     # TODO: beter document / configure the usage of different encoding strategies.
     seperator_token_id, parameter_token_id, numerical_token_mask = get_token_masks(
-        seperator = ',',
+        seperator = seperator,
         padding = '',
         numerical_encodings = number_repr,
         tokenizer=tokenizer
@@ -201,23 +202,24 @@ def main_llm(args: argparse.Namespace) -> None:
     best_nll_parameters = study.best_params
     # Step 2, store hyper-parameter for future reference
     #   automatically done by the hyper
-    mapping_function =  base_transformation(precision=best_nll_parameters['precision'])
+    mapping_function =  base_transformation(precision=best_nll_parameters['precision'], seperator=' ' if 'gpt' in model_name else '')
     # Step 3, add constraints to generation
     generation_config = GenerationConfig(
-        max_new_tokens=600,                     # Limit output (default to 600 for testing)
+        max_new_tokens=80,                     # Limit output (default to 600 for testing)
         do_sample=True,                         # Randomly select
         top_k=10 + 1,                           # Only consider numerical and comma TODO: Add seperator
         eos_token_id=model.config.eos_token_id, # EOS token (note that model is not allowed to generate this token :>
         # top_p=0.97,                             # Limit to output probability of 97%
         return_dict_in_generate=True,           # Ensure that we can retrieve scores in deocidng results
         output_scores=True,                      # Ensure that we don;t discard scored after decoding
-        temperature=best_nll_parameters['tau']
+        temperature=best_nll_parameters['tau'],
+        renormalize_logits=True,
     )
 
     num_token_ids = get_token_ids_for_numerical(
             number_repr,
             tokenizer)
-    sep_token_id = get_token_ids_for_numerical(' ,', tokenizer)
+    sep_token_id = get_token_ids_for_numerical(seperator, tokenizer)
     # Note we don't set the top_k, as we limit the ouput vocabulary using our LogitRescaler.
     # TODO: Create configuration object to reduce number of parameters everywhere
     warper = NumericalLogitsWarper(
@@ -241,10 +243,10 @@ def main_llm(args: argparse.Namespace) -> None:
             form=form,
         )
         # TODO: Determine whether or not the model should be restricted to generate with
-
         # Generate multiple responses for each item
         predictions: tp.List[tp.List[torch.LongTensor]]
         scores: tp.List[tp.List[torch.FloatTensor]]
+        # TODO: Figure out LLama2 detokenization.
         predictions, scores = get_generated_completions(
             train_sets=train_sets_tokens,
             test_sets=test_sets_tokens,
@@ -254,7 +256,7 @@ def main_llm(args: argparse.Namespace) -> None:
             seperator_token_id=sep_token_id,
             numerical_token_mask=numerical_token_mask,
             completions=20,
-            parallel=20,
+            parallel=10
         )
 
 
@@ -266,7 +268,8 @@ def main_llm(args: argparse.Namespace) -> None:
                 mapping_function=mapping_function,
                 train_len=len(train_set),
                 test_len=len(test_set),
-                seperator_id=seperator_token_id
+                seperator_id=seperator_token_id,
+                seperator=seperator
         )
 
         processed_results.append(results)
@@ -304,8 +307,8 @@ def main_llm(args: argparse.Namespace) -> None:
 
 if __name__ == "__main__":
     default_max_history = 400
-    # default_model = "meta-llama/Llama-2-7b-hf"
-    default_model = 'gpt2'
+    default_model = "meta-llama/Llama-2-7b-hf"
+    # default_model = 'gpt2'
     default_dataset = "hpc"
     default_subcat = None
     default_truncate = "before"

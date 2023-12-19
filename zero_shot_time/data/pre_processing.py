@@ -152,13 +152,22 @@ def tokenize_values(
 
     if 'llama' in tokenizer.__class__.__name__.lower():
         # Hacky solution to abuse tokenizer to represent values in the way we want
-        batch_encoded_values: tp.List[tp.List[int]] = [
-           tokenizer.convert_tokens_to_ids(
-                value + [seperator],
-            )    for value in values]
-        # To get attention_mask
-        encoded_batch: BatchEncoding = tokenizer.pad(
-                BatchEncoding({'input_ids': torch.tensor(list(chain(*batch_encoded_values)), dtype=torch.long)}))
+        # batch_encoded_values: tp.List[tp.List[int]] = [
+        #    tokenizer.convert_tokens_to_ids(
+        #         value + [seperator],
+        #     )    for value in values]
+        # # To get attention_mask
+        # encoded_batch: BatchEncoding = tokenizer.pad(
+        #         BatchEncoding({'input_ids': torch.tensor(list(chain(*batch_encoded_values)), dtype=torch.long)}))
+        # Note that LLama(2) requires `<s> ` to be part of the prompt :)
+        encoded_batch = tokenizer.batch_encode_plus(
+                [
+                    seperator.join([
+                        ''.join(value) for value in values
+                    ])
+                ],
+                return_tensors='pt'
+        )
     else:
         encoded_batch: BatchEncoding = tokenizer.batch_encode_plus(
                 [value + [seperator] for value in values],

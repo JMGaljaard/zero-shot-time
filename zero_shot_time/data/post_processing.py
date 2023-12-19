@@ -26,12 +26,17 @@ def base_transformation(base=10, precision=3, seperator=" "):
 
     def curried_transform(value: str):
         # Reverse the order from MSB to LSB
-        value = np.flip(np.array(value.split(local_seperator), dtype=np.int32))
+        if len(seperator) > 0:
+            value_list = value.split(local_seperator)
+        else:
+            # Note that this will only work if value components can be represented in single digits/characters.
+            value_list = list(value)
+        value = np.flip(np.array(value_list, dtype=np.int32))
         D = len(value)
         # Generate a list of powers of 10 with [10^-1, 10^-2, ..., 10^-precision+1, 10^-precision]
         powers = np.arange(-local_precision, -local_precision + D)
         # Calculateteh
-        val = np.sum(value * local_base**powers)
+        val = np.sum((value * local_base**powers)[:local_precision])
         return val
 
     return curried_transform
@@ -41,7 +46,7 @@ def convert_tokens_to_timeseries(
     token_ids: torch.LongTensor,
     tokenizer: transformers.PreTrainedTokenizerFast,
     mapping_function: tp.Callable = None,
-    delim: str = ", ",
+    seperator: str = " ,",
     dtype=np.float64,
 ) -> np.array:
     """Function to transfrom encoded text back to  tokenized data back to floating points
@@ -54,11 +59,14 @@ def convert_tokens_to_timeseries(
 
     # 1. Convert tokens to text
 
-    texts = tokenizer.decode(token_ids)
+    texts = tokenizer.decode(token_ids,
+                 skip_special_tokens=True,
+                 clean_up_tokenization_spaces=False
+                 )
 
     # 2. Split values to individual samples
     # For specific edge case, we need to strip delimiter
-    string_values = [text.strip(delim) for text in texts.split(delim)]
+    string_values = [text.strip(seperator) for text in texts.split(seperator)]
 
 
     # 3. Convert values to values

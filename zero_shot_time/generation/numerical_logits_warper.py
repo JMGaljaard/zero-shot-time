@@ -5,6 +5,8 @@ import typing as tp
 
 from transformers.generation.logits_process import LOGITS_PROCESSOR_INPUTS_DOCSTRING
 
+from zero_shot_time.generation.tokenizer import get_token_ids_for_numerical
+
 
 class NumericalLogitsWarper(LogitsWarper):
     """Simple logits processor implementation required for generation with a 'token mask', i.e. to limit the model to
@@ -75,7 +77,7 @@ def get_token_masks(seperator: str, padding: str, numerical_encodings: tp.List[s
     seperators and paddings will not be in the set of ;allowable tokesn;, i.e., they will be assigned a `1` value
     in generated mask.
     Args:
-        seperator ():
+        seperator (str): Seperator string between values
         padding ():
         numerical_encodings ():
         tokenizer ():
@@ -83,14 +85,12 @@ def get_token_masks(seperator: str, padding: str, numerical_encodings: tp.List[s
     Returns:
 
     """
-    seperator_token_id = None if seperator is None else tokenizer.encode(
-        seperator,
-        add_special_tokens=False
-    )[-1]
-    padding_token_id = None if len(padding) == 0 else tokenizer.encode(
-        padding,
-        add_special_tokens=False
-    )[-1]
+    seperator_token_id = None if seperator is None else get_token_ids_for_numerical(
+            seperator,
+            tokenizer
+    )
+    padding_token_id = None if len(padding) == 0 else get_token_ids_for_numerical(padding,
+                                                                                  tokenizer)
 
     allowable_token_ids = tokenizer.batch_encode_plus(
         numerical_encodings,

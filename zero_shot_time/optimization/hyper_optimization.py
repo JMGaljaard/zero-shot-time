@@ -42,6 +42,7 @@ def process_sets(
     train_sets, test_sets = [], []
     hyper_scalers = []
     for train_set, test_set in param_sets:
+        predictions = len(test_set) - len(train_set)
         # 1. Pre-process training and compute scaling object (prevent knowledge leakage through scaling
         scaler, process_values_train, input_ids_train = pre_processing.convert_timeseries_to_fixed_precision(
             None, tokenizer, values=train_set, precision=precision, seperator=seperator, form=form, **scaler_kwargs

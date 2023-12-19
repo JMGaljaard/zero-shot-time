@@ -4,7 +4,7 @@ import typing as tp
 import torch
 import transformers
 
-
+@torch.no_grad()
 def get_generated_completions(
         train_sets: tp.List[torch.Tensor],
         test_sets: tp.List[torch.Tensor],
@@ -15,7 +15,8 @@ def get_generated_completions(
         seperator_token_id: int = None,
         attempts = 3,
         numerical_token_mask: torch.BoolTensor = None,
-        parallel: int = 1
+        parallel: int = 1,
+        to_generate: int = 5,
 ) -> tp.Tuple[tp.List[tp.List[torch.LongTensor]], tp.List[tp.List[torch.FloatTensor]]]:
     """Generate completions for a train-set dataset based on a given model.
 
@@ -44,15 +45,16 @@ def get_generated_completions(
     to_gen = completions
     # TODO: Implement parallel decoding :)
     for train_set, test_set in zip(train_sets, test_sets):
-        min_samples = torch.sum(torch.cat([train_set, test_set]) == seperator_token_id) - 1
+        # Make sure that it is completed
+        min_samples = torch.sum(test_set == seperator_token_id) + 1
         prediction = []
         score = []
+        train_view = train_set.view(1, train_set.size(-1))
         for _ in range(attempts * completions // parallel):
             if len(prediction) >= completions:
                 break
-            train_view = train_set.view(1, train_set.size(-1))
-
-
+            # TODO: Figure out what keeps haning to memory
+            torch.cuda.empty_cache()
             # Create parallel responses
             response = model.generate(
                 input_ids=train_view,
