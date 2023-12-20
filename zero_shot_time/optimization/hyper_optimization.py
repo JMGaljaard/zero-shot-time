@@ -49,7 +49,7 @@ def process_sets(
         )
         # 2. Pre-process test and re-use scaling so tha
         _, process_values_test, input_ids_test = pre_processing.convert_timeseries_to_fixed_precision(
-            None, tokenizer, values=test_set, pre_processor=scaler, precision=precision, seperator=seperator, form=form, **scaler_kwargs
+            None, tokenizer, values=train_set + test_set, pre_processor=scaler, precision=precision, seperator=seperator, form=form, **scaler_kwargs
         )
 
         if drop_test_comma:
@@ -76,6 +76,7 @@ def curried_hyper_opt(
     beta: tp.List[float] = None,
     precision: tp.List[int] = None,
     tau: tp.List[float] = None,
+    offset: int = 0,
 ):
     """Curried applicatble function to perform hyper-parameter tuning with grid search. Note that not all parameters are
     'required', but are presently provided with debugging and extension in mind.
@@ -92,7 +93,8 @@ def curried_hyper_opt(
         beta (List[float]): (categorical) list of hyper-parmeter values to use during grid-search for beta (scaler).
         precision (): (categorical) list of hyper-parmeter values to use during grid-search for encoding (precision).
         tau (): (categorical) list of hyper-parmeter values to use during grid-search for encoding.
-
+        offset (int): Number of 'offset' tokens that are added by default tokenization as expected by the model.
+            Some newer models require a set of `start prompt' tokens that need to be accounted for.
     Returns:
 
     """
@@ -102,7 +104,7 @@ def curried_hyper_opt(
     beta_grid = beta
     precision_grid = precision
     tau_grid = tau
-
+    local_offset = offset
     # TODO: Check if precision requires actual evaluation, as in general longer sequences tend to have higher logits.
     def llm_hyper_opt(
             trial: Trial
@@ -159,7 +161,7 @@ def curried_hyper_opt(
             dy_dx = jax.vmap(jax.grad(scalers[0].transform))(
                 np.array(train_value)
             ).mean().item()
-            nll_ = calculate_negative_log_likelihood(
+            logits, nll_ = calculate_negative_log_likelihood(
                 model=model,                                    #
                 input_token_ids=train_set,                      # Provide input in token_id representation
                 target_token_ids=test_set,                      # Provide targets in token_id representation
@@ -169,7 +171,10 @@ def curried_hyper_opt(
                 token_mask=allowable_tokens_mask,               #
                 precision=precision,
                 base=10,
-                temperature=tau
+                temperature=tau,
+                pre_computed_logits=None,                      # Possibly re-use some results during hyper-parameter search,
+                offset=local_offset,
+                prediction_len=len(test_value) - len(train_value)    # Prediction length
             )
             nll_aggregate += nll_
         # Return the average nll score to the caller for hyper-parameter optimization.
@@ -192,7 +197,26 @@ def perform_hyper_parameter_tuning(
         form: str,
         padding_token_id: int,
         search_space: dict[str, tp.List[tp.Any]],
+        offset: int = 0,
 ) -> Study:
+    """
+
+    Args:
+        dataset_name: Dataset name (for creating a logging file
+        model_name:
+        model:
+        tokenizer:
+        data_sets:
+        allowable_token_mask:
+        seperator_token_id:
+        seperator:
+        form:
+        padding_token_id:
+        search_space:
+        offset (int): Number of 'offset' tokens that need to be discarded from history.
+    Returns:
+
+    """
     name = f"{dataset_name}_{model_name}"
     storage = f"sqlite:///{name.split('/')[-1]}.db"
     study = optuna.create_study(
@@ -201,6 +225,7 @@ def perform_hyper_parameter_tuning(
         sampler=BruteForceSampler(seed=42),
         load_if_exists=True
     )
+    max_trails = np.prod([len(v) for _, v in search_space.items()])
 
     partial_applied_search = curried_hyper_opt(
         study=study,
@@ -216,8 +241,8 @@ def perform_hyper_parameter_tuning(
         beta=search_space['beta'],
         precision=search_space['precision'],
         tau=search_space['tau'],
+        offset=offset,
     )
     # Because we peform brute-force search, we don't specify number of trails.
-    # study.optimize(partial_applied_search)
-
+    study.optimize(partial_applied_search, n_trials=max_trails)
     return study

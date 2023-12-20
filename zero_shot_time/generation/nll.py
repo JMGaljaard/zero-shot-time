@@ -14,7 +14,10 @@ def calculate_negative_log_likelihood(
     dy_dx: float,
     precision: int = 3,
     base: int = 10,
-    temperature: float = 0.7
+    temperature: float = 0.7,
+    pre_computed_logits = None,
+    offset = 0,
+    prediction_len = 8,
 ):
     """
     Calculate the Negative Log-Likelihood (NLL) per dimension using the output logits of a Language Model (LM)
@@ -38,6 +41,7 @@ def calculate_negative_log_likelihood(
         temperature (float): Temperature to scale distribution of logits (hyper-parameter).
     Returns:
         float: Calculated Negative Log-Likelihood (NLL) per dimension.
+        torch.FloatTensor containing pre-scaling logits.
     """
 
     assert torch.all(input_token_ids[-1] == separator_token_id), (
@@ -46,30 +50,35 @@ def calculate_negative_log_likelihood(
     assert torch.all(target_token_ids[[0, -1]] != separator_token_id), {
         "Provided targets should not start with seperator! Check your encoding schema!"
     }
-    full_series = torch.concat([input_token_ids, target_token_ids], dim=0)
+    # Note: train_input_ids and target_input_ids share the same start, but the targets can be seen as the through thruth
+    # completion of the prompt!
+    full_series = target_token_ids
     # TODO: Ensure that hyper-parameters are set in a logits warper list.
 
     # Use generatino function to compute logits scores on input 'prompt'. leverage max_new_tokens=0 to effectively
     #   perform a forward with the underlying model.
     with torch.no_grad():
-        # Grads shall not pass!
-        response: GenerateOutput = model.forward(
-            full_series.unsqueeze(0),            # Get whole series, create 'virtual batch'
-        )
-        # TODO: Check wether we have to re-scale by the temperature.
-        logits = response.logits / temperature
+        if not isinstance(pre_computed_logits, torch.Tensor):
+            # Grads shall not pass!
+            response: GenerateOutput = model.forward(
+                full_series.unsqueeze(0),            # Get whole series, create 'virtual batch'
+            )
+            # TODO: Check wether we have to re-scale by the temperature.
+            logits = response.logits / temperature
+        else:
+            logits = pre_computed_logits / temperature
         # Set logits to -100 (ignore) for dissallowed tokens
         logits[0, token_mask[None, :].repeat(logits.size(1), 1)] = -100
         # get log probabilties over output dimension, skip the EOS token, get only the required values
         logp_num_tokens = torch.log_softmax(logits, dim=-1)[0, torch.arange(len(full_series)), full_series]
 
-        # Get sequence length
+        # Get sequence length, keep in mind that some models have some starting tokens (e.g. LLama2)
         history_len = len(input_token_ids)
 
         # Take only the future / predictions tokens into account.
         logp_future_tokens = logp_num_tokens[history_len:]
 
-        base_nll = -logp_future_tokens.sum() / len(target_token_ids)
+        base_nll = -logp_future_tokens.sum() / prediction_len
 
         # Average is equal to the product itself
         bin_offset = -precision * torch.log(torch.tensor(base, device=model.device, dtype=torch.float32))
@@ -79,5 +88,7 @@ def calculate_negative_log_likelihood(
 
         # Add components  (they are already negative)
         nll_res = base_nll + bin_offset + scaling_offset
-
-        return nll_res
+        if not isinstance(pre_computed_logits, torch.Tensor):
+            return response.logits, nll_res
+        else:
+            return pre_computed_logits, nll_res
