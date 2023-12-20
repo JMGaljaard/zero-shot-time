@@ -58,17 +58,19 @@ def create_train_test_split(
     param_sets, train_sets, test_sets = [], [], []
 
     for train_set, test_set in zip(train_dataset[target], test_dataset[target]):
+        prediction_length = len(test_set) - len(train_set)
         # Limit the maximum length of the dataset to `max_length`
-        limit_train_set = train_set[-max_length:]
+        limit_train_set = train_set[-(max_length + prediction_length):]
         if len(test_set) > max_length:
             logging.fatal("Length of test dataset exceeds maximum length also!")
 
         # Create hyper-parameter split for zero-shot training
-        train_h, val_h = create_validation_split(limit_train_set, len(test_set))
+        train_h, val_h = create_validation_split(limit_train_set, prediction_length)
 
         # Append dataset to the required number of sets.
         param_sets.append((train_h, val_h))
         train_sets.append(limit_train_set)
-        test_sets.append(test_set)
+        # Recall, we are only interested the last few predictoins.
+        test_sets.append(test_set[-prediction_length:])
 
     return param_sets, train_sets, test_sets
