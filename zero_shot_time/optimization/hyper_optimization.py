@@ -199,6 +199,7 @@ def perform_hyper_parameter_tuning(
         padding_token_id: int,
         search_space: dict[str, tp.List[tp.Any]],
         offset: int = 0,
+        experiment_name: str = 'test'
 ) -> Study:
     """
 
@@ -218,16 +219,16 @@ def perform_hyper_parameter_tuning(
     Returns:
 
     """
-    name = f"{dataset_name}_{model_name}"
-    storage = f"sqlite:///{name.split('/')[-1]}.db"
+    storage = f"sqlite:///experiment_name.db"
     study = optuna.create_study(
-        study_name=name,
+        study_name=experiment_name,
         storage=storage,
         sampler=BruteForceSampler(seed=42),
         load_if_exists=True
     )
     max_trails = np.prod([len(v) for _, v in search_space.items()])
 
+    # In this case we can re-use some results
     partial_applied_search = curried_hyper_opt(
         study=study,
         train_eval_sets=data_sets,

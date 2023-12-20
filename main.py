@@ -145,6 +145,8 @@ def main_llm(args: argparse.Namespace) -> None:
     sub_category = args.subcat
     truncation = args.truncate
 
+    experiment_name = f'{dataset_name}_{sub_category}_{model_name.split("/")[-1]}'
+
     # 1.1 Load model (note the causal lm !)
 
 
@@ -199,6 +201,7 @@ def main_llm(args: argparse.Namespace) -> None:
         search_space=SEARCH_SPACES[model_name],
         form=form,
         offset=0 if 'gpt' in model_name else 0,     # TODO: Check if we need offset?
+        experiment_name=experiment_name,
     )
 
     best_nll_parameters = study.best_params
@@ -277,7 +280,7 @@ def main_llm(args: argparse.Namespace) -> None:
         # TODO: Filter responses to have minimum length during processing.
 
         # TODO: Can we add streaming into the mix?
-    with open(f'{dataset_name}_{sub_category}_{model_name}.data.pickle', 'wb') as f:
+    with open(f'{experiment_name}.data.pickle', 'wb') as f:
         logging.info("Writing results to file")
         # Pickle the 'data' dictionary using the highest protocol available.
         pickle.dump(processed_results, f, pickle.HIGHEST_PROTOCOL)
