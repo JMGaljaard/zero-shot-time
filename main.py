@@ -183,7 +183,8 @@ def main_llm(args: argparse.Namespace) -> None:
         numerical_encodings = number_repr,
         tokenizer=tokenizer
     )
-
+    # Ensure that also the seperator token is allowed. Otherwise, we will have high NLL :>
+    numerical_token_mask[seperator_token_id] = False
     # Step 1, hyper-parameter search to get reasonable hyper-parameters
     study = perform_hyper_parameter_tuning(
         dataset_name=f"{dataset_name}_{sub_category}",
@@ -197,6 +198,7 @@ def main_llm(args: argparse.Namespace) -> None:
         padding_token_id=parameter_token_id,
         search_space=SEARCH_SPACES[model_name],
         form=form,
+        offset=0 if 'gpt' in model_name else 0,     # TODO: Check if we need offset?
     )
 
     best_nll_parameters = study.best_params
@@ -275,7 +277,8 @@ def main_llm(args: argparse.Namespace) -> None:
         # TODO: Filter responses to have minimum length during processing.
 
         # TODO: Can we add streaming into the mix?
-    with open('data.pickle', 'wb') as f:
+    with open(f'{dataset_name}_{sub_category}_{model_name}.data.pickle', 'wb') as f:
+        logging.info("Writing results to file")
         # Pickle the 'data' dictionary using the highest protocol available.
         pickle.dump(processed_results, f, pickle.HIGHEST_PROTOCOL)
 

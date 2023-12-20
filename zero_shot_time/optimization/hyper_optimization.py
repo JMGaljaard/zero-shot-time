@@ -42,7 +42,6 @@ def process_sets(
     train_sets, test_sets = [], []
     hyper_scalers = []
     for train_set, test_set in param_sets:
-        predictions = len(test_set) - len(train_set)
         # 1. Pre-process training and compute scaling object (prevent knowledge leakage through scaling
         scaler, process_values_train, input_ids_train = pre_processing.convert_timeseries_to_fixed_precision(
             None, tokenizer, values=train_set, precision=precision, seperator=seperator, form=form, **scaler_kwargs
@@ -153,7 +152,8 @@ def curried_hyper_opt(
             seperator=seperator,
             form=form,
         )
-
+        # TODO: Resolve issue with calculating NLL over data using ...
+        # TODO: Add 'raw' scores to output / result so we can re-use prior results.
         # 3. Calculate NLL statistic on pre-processed data.
         nll_aggregate = 0
         for (train_value, test_value), train_set, test_set in zip(train_eval_sets, train_sets_tokens, test_sets_tokens):
@@ -176,6 +176,7 @@ def curried_hyper_opt(
                 offset=local_offset,
                 prediction_len=len(test_value) - len(train_value)    # Prediction length
             )
+            # trial.set_user_attr('logits', logits.detach().cpu())
             nll_aggregate += nll_
         # Return the average nll score to the caller for hyper-parameter optimization.
         return nll_aggregate / len(train_eval_sets)
