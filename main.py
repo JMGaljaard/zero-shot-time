@@ -232,7 +232,6 @@ def main_llm(args: argparse.Namespace) -> None:
     processed_results = []
     # Prepare generation configuration, to set sampling on, and other samplign techniques
     for train_set, test_set in tqdm.tqdm(zip(train_sets, test_sets), total=len(train_sets)):
-        torch.cuda.empty_cache()
         train_sets_tokens, test_sets_tokens, [scaler] = process_sets(
             [(train_set, test_set)],
             precision=best_nll_parameters['precision'],

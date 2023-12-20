@@ -53,8 +53,6 @@ def get_generated_completions(
         for _ in range(attempts * completions // parallel):
             if len(prediction) >= completions:
                 break
-            # TODO: Figure out what keeps haning to memory
-            torch.cuda.empty_cache()
             # Create parallel responses
             response = model.generate(
                 input_ids=train_view,
