@@ -161,11 +161,9 @@ def tokenize_values(
         #         BatchEncoding({'input_ids': torch.tensor(list(chain(*batch_encoded_values)), dtype=torch.long)}))
         # Note that LLama(2) requires `<s> ` to be part of the prompt :)
         encoded_batch = tokenizer.batch_encode_plus(
-                [
-                    seperator.join([
-                        ''.join(value) for value in values
-                    ])
-                ],
+                [''.join([
+                    ''.join(value + [seperator]) for value in (values)
+                ])],
                 return_tensors='pt'
         )
     else:
