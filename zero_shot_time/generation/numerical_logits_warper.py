@@ -67,7 +67,7 @@ class NumericalLogitsWarper(LogitsWarper):
         # inputs [batch_size, vocabulary]
         # scores [batch_size, vocabulary]
 
-        scores[:, self.mask] = -float("inf")
+        scores[:, self.mask] = -float('inf')
 
         return scores
 
@@ -92,11 +92,9 @@ def get_token_masks(seperator: str, padding: str, numerical_encodings: tp.List[s
     padding_token_id = None if len(padding) == 0 else get_token_ids_for_numerical(padding,
                                                                                   tokenizer)
 
-    allowable_token_ids = tokenizer.batch_encode_plus(
-        numerical_encodings,
-        return_tensors='pt',
-        add_special_tokens=False
-    )['input_ids'][:, -1].flatten()
+    allowable_token_ids = get_token_ids_for_numerical(
+            numerical_encodings
+    )
 
     allowable_mask = torch.ones(
         (tokenizer.vocab_size),

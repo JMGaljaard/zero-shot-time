@@ -36,7 +36,7 @@ def base_transformation(base=10, precision=3, seperator=" "):
         # Generate a list of powers of 10 with [10^-1, 10^-2, ..., 10^-precision+1, 10^-precision]
         powers = np.arange(-local_precision, -local_precision + D)
         # Calculateteh
-        val = np.sum((value * local_base**powers)[:local_precision])
+        val = np.sum((value * local_base**powers))
         return val
 
     return curried_transform
