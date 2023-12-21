@@ -1,3 +1,4 @@
+import logging
 import typing as tp
 
 import jax
@@ -6,6 +7,7 @@ import optuna.study
 import torch
 import transformers.models.gpt2.modeling_gpt2
 from optuna import Study
+from tqdm import tqdm
 
 from zero_shot_time.data import pre_processing
 from optuna.samplers import BruteForceSampler
@@ -140,6 +142,16 @@ def curried_hyper_opt(
         precision = trial.suggest_categorical('precision',
                                               choices=precision_grid)
 
+        # 0. We check if we can re-use hyper-parameters
+        logits = None
+        res = [trial for trial in local_study.trials if (trial.params['alpha'] == alpha and
+                                                   trial.params['beta'] == beta and
+                                                   trial.params['precision'] == precision and trial.params['tau'] != tau)]
+        # if len(res) > 0:
+        #     prior_trail: FrozenTrial = res[0]
+        #     logits = prior_trail.user_attrs.get('logits', None)
+        #     if logits != None:
+        #         logging.info("Re-using logits of prior run!")
         # 1. Create tokenized representation
 
         # 2. Pre-process and tokenize data
@@ -156,7 +168,8 @@ def curried_hyper_opt(
         # TODO: Add 'raw' scores to output / result so we can re-use prior results.
         # 3. Calculate NLL statistic on pre-processed data.
         nll_aggregate = 0
-        for (train_value, test_value), train_set, test_set in zip(train_eval_sets, train_sets_tokens, test_sets_tokens):
+        for (train_value, test_value), train_set, test_set in tqdm(zip(train_eval_sets, train_sets_tokens, test_sets_tokens),
+                                                                   total=len(train_eval_sets)):
             # Retrieve grad (scalar) from learned scaler
             dy_dx = jax.vmap(jax.grad(scalers[0].transform))(
                 np.array(train_value)
@@ -174,7 +187,7 @@ def curried_hyper_opt(
                 temperature=tau,
                 pre_computed_logits=None,                      # Possibly re-use some results during hyper-parameter search,
                 offset=local_offset,
-                prediction_len=len(test_value) - len(train_value)    # Prediction length
+                prediction_len=len(test_set) - len(train_set)    # Prediction length
             )
             # trial.set_user_attr('logits', logits.detach().cpu())
             nll_aggregate += nll_
@@ -219,7 +232,7 @@ def perform_hyper_parameter_tuning(
     Returns:
 
     """
-    storage = f"sqlite:///experiment_name.db"
+    storage = f"sqlite:///{experiment_name}.db"
     study = optuna.create_study(
         study_name=experiment_name,
         storage=storage,
@@ -245,6 +258,9 @@ def perform_hyper_parameter_tuning(
         tau=search_space['tau'],
         offset=offset,
     )
-    # Because we peform brute-force search, we don't specify number of trails.
-    study.optimize(partial_applied_search, n_trials=max_trails)
+    if study.trials is not None and len(study.trials) < max_trails:
+        # Because we peform brute-force search, we don't specify number of trails.
+        study.optimize(partial_applied_search)
+    else:
+        logging.info("re=using result.")
     return study

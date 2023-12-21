@@ -74,3 +74,43 @@ def create_train_test_split(
         test_sets.append(test_set[-prediction_length:])
 
     return param_sets, train_sets, test_sets
+
+def get_custom_train_test_split(
+    full_data: np.array,
+    split_fraction: float = 0.2,
+    max_length: int = 400,
+) -> tp.Tuple[tp.List[tp.Tuple[np.array, np.array]], tp.List[np.array], tp.List[np.array]]:
+    """Create train/train_val and test splits to use for a datasets. Note, this function only supports univariate data!
+
+    Args:
+        full_data (str): Custom dataset in numpy array format.
+        split_fraction (float): (Last) fraction which is to be used as testing data.
+        max_length (object): Maximum value of historical datapoints to use during transformation of the data.
+
+
+    Returns:
+        List[(np.array, np.array)]: List of tuples with a hyper-parameter optimization train and test list for each
+            provided training set.
+        List[np.array]: List of training sets limited in maximum length by provided `max_length`.
+        List[np.array]: List of testing sets corresponding to each training set.
+
+    """
+    param_sets, train_sets, test_sets = [], [], []
+    total_len = len(full_data)
+    prediction_length = int(split_fraction * total_len)
+    train_set = full_data[:-prediction_length].tolist()
+    test_set = full_data[-prediction_length: ].tolist()
+
+    limit_train_set = train_set[-(max_length + prediction_length):]
+
+
+    # Create hyper-parameter split for zero-shot training
+    train_h, val_h = create_validation_split(limit_train_set, prediction_length)
+
+    # Append dataset to the required number of sets.
+    param_sets.append((train_h, val_h))
+    train_sets.append(limit_train_set)
+    # Recall, we are only interested the last few predictoins.
+    test_sets.append(test_set[-prediction_length:])
+
+    return param_sets, train_sets, test_sets

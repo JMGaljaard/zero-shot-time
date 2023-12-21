@@ -10,15 +10,13 @@ import torch
 import tqdm
 import transformers
 from transformers import GenerationConfig
-
 from zero_shot_time.data.post_processing import convert_tokens_to_timeseries, base_transformation
 from zero_shot_time.data.scaler import Scaler
-from zero_shot_time.generation import NumericalLogitsWarper
 from zero_shot_time.data import get_dataset, pre_processing
-from zero_shot_time.data.splits import create_train_test_split
+from zero_shot_time.data.splits import create_train_test_split, get_custom_train_test_split
 from zero_shot_time.generation import set_padding_or_none
 from zero_shot_time.generation.generation import get_generated_completions
-from zero_shot_time.generation.numerical_logits_warper import get_token_masks
+from zero_shot_time.generation.numerical_logits_warper import get_token_masks, NumericalLogitsWarper
 from zero_shot_time.generation.tokenizer import get_token_ids_for_numerical
 from zero_shot_time.optimization import perform_hyper_parameter_tuning
 from zero_shot_time.optimization.hyper_optimization import process_sets
@@ -37,6 +35,12 @@ SEARCH_SPACES = {
         'alpha': [0.5, 0.7, 0.9, 0.99],
         'beta': [0.0, 0.14, 0.3, 0.5]
     },
+    'gpt2-large': {
+        'precision': [2, 3],
+        'tau': [0.7],
+        'alpha': [0.5, 0.7, 0.9, 0.99],
+        'beta': [0.0, 0.14, 0.3, 0.5]
+    },
     'gpt2': {
         'precision': [2, 3],
         'tau': [0.7],
@@ -50,13 +54,20 @@ SEARCH_SPACES = {
         'alpha': [0.99],
         'beta': [0.3]
     },
-    'llama13b': {
+    'meta-llama/Llama-2-13b-hf': {
         'precision': [3],
         'nucleus': [0.9],
         'tau': [0.2, 0.4, 0.6, 0.8],
         'alpha': [0.99],
         'beta': [0.3]
-    }
+    },
+    'TheBloke/Llama-2-13B-GGUF': {
+        'precision': [3],
+        'nucleus': [0.9],
+        'tau': [0.2, 0.4, 0.6, 0.8, 1.0],
+        'alpha': [0.99],
+        'beta': [0.3]
+    },
 }
 
 
@@ -113,12 +124,12 @@ def post_process_responses(
             # Get sub-tokens index using seperator to superfluous index (
             indices = (input_ids == seperator_id).nonzero().squeeze()
             # Require n - 1 seperators to compute
-            if len(indices) >= (test_len - 1):
-                temp = test_len - 1
+            if len(indices) >= (train_len + test_len - 1):
+                temp = train_len + test_len - 1
                 if temp >= len(indices):
                     index = -1
                 else:
-                    index = indices[test_len - 1]
+                    index = indices[temp]
             else:
                 # Otherwise there are no super-flo=uous tokens, i.e. just long enough
                 index = -1
@@ -156,27 +167,38 @@ def main_llm(args: argparse.Namespace) -> None:
         model.to('cuda')
         # 1.2.1 Load and initialize the models' tokenizer and prepare tokenizer for batch-encoding plus.
         tokenizer = transformers.GPT2TokenizerFast.from_pretrained(model_name, token=os.getenv('HF_TOKEN'))
-    else:
+    elif 'meta' in model_name:
         model = transformers.AutoModelForCausalLM.from_pretrained(
-                model_name, device_map='auto', torch_dtype=torch.float16)
+                model_name, device_map='auto', torch_dtype=torch.float16, token=os.getenv('HF_TOKEN'))
         tokenizer = transformers.LlamaTokenizerFast.from_pretrained(model_name, token=os.getenv('HF_TOKEN'))
 
+    else:
+        import ctransformers
+        model = ctransformers.AutoModelForCausalLM.from_pretrained(
+                model_name, model_file='llama-2-13b.Q5_K_S.gguf', model_type="llama", gpu_layers=50)
+        tokenizer = transformers.AutoTokenizer.from_pretrained('meta-llama/Llama-2-7b-hf', token=os.getenv('HF_TOKEN'))
+        raise NotImplementedError("Code is removed to run this version. Forward / tokenization / detokenization is dropped")
     # 1.2.2 In case the fast-tokenizer has no padding, set the padding manually
     set_padding_or_none(tokenizer, set_padding="eos")
 
     # 2. Load dataset
     dataset, target = get_dataset(dataset_name=dataset_name, sub_category=sub_category)
 
-    # Create train, validation, test split
-    param_sets, train_sets, test_sets = create_train_test_split(dataset["train"], dataset["test"], target=target)
+    if target is not None:
+        # Create train, validation, test split
+        param_sets, train_sets, test_sets = create_train_test_split(dataset["train"], dataset["test"], target=target)
+    else:
+        # For darts dataset, we leverage custom split.
+        param_sets, train_sets, test_sets = get_custom_train_test_split(dataset, split_fraction=0.2, max_length=400)
 
     # TODO: Create train / test split according to paper
     if truncation == "before":
         logging.warning("Truncating before pre-processing will affect the 'range' of the scaled values!")
         # TODO: Implement maximum length split.
-
-    seperator = ' ,' if 'gpt' in model_name else ','
-    number_repr = [f' {i}' for i in range(10)] if 'gpt' in model_name else [f'{i}' for i in range(10)]
+    # By default, we leverage.
+    seperator = ',' if 'gpt' in model_name else ','
+    # We leverage 'Ġ', as we use `tokenizer.convert_tokens_to_ids`, so we have to adhere to Huggingface format.
+    number_repr = [f'Ġ{i}' for i in range(10)] if 'gpt' in model_name else [f'{i}' for i in range(10)]
     form = ' {}' if 'gpt' in model_name else '{}'
     # TODO: beter document / configure the usage of different encoding strategies.
     seperator_token_id, parameter_token_id, numerical_token_mask = get_token_masks(
@@ -207,24 +229,28 @@ def main_llm(args: argparse.Namespace) -> None:
     best_nll_parameters = study.best_params
     # Step 2, store hyper-parameter for future reference
     #   automatically done by the hyper
-    mapping_function =  base_transformation(precision=best_nll_parameters['precision'], seperator=' ' if 'gpt' in model_name else '')
+    mapping_function = base_transformation(precision=best_nll_parameters['precision'], seperator=' ' if 'gpt' in model_name else '')
     # Step 3, add constraints to generation
-    generation_config = GenerationConfig(
-        max_new_tokens=80,                     # Limit output (default to 600 for testing)
-        do_sample=True,                         # Randomly select
-        top_k=10 + 1,                           # Only consider numerical and comma TODO: Add seperator
-        eos_token_id=model.config.eos_token_id, # EOS token (note that model is not allowed to generate this token :>
-        # top_p=0.97,                             # Limit to output probability of 97%
-        return_dict_in_generate=True,           # Ensure that we can retrieve scores in deocidng results
-        output_scores=True,                      # Ensure that we don;t discard scored after decoding
-        temperature=best_nll_parameters['tau'],
-        renormalize_logits=True,
-    )
 
     num_token_ids = get_token_ids_for_numerical(
             number_repr,
             tokenizer)
     sep_token_id = get_token_ids_for_numerical(seperator, tokenizer)
+    # Instead of using warper, we make use of bad-words list to generate only ...
+    good_set = set(num_token_ids + [seperator_token_id])
+    generation_config = GenerationConfig(
+        max_new_tokens=160,                     # Limit output (default to 600 for testing)
+        do_sample=True,                         # Randomly select
+        eos_token_id=model.config.eos_token_id, # EOS token (note that model is not allowed to generate this token :>
+        # top_k=11,
+        # top_p=0.92,                             # Limit to output probability of 97%
+        return_dict_in_generate=True,           # Ensure that we can retrieve scores in deocidng results
+        output_scores=True,                      # Ensure that we don;t discard scored after decoding
+        temperature=1.0 if 'llama' in model_name else study.best_params['tau'],
+        renormalize_logits=True,
+        bad_words_ids=[[i] for i in range(model.config.vocab_size) if i not in good_set]
+    )
+
     # Note we don't set the top_k, as we limit the ouput vocabulary using our LogitRescaler.
     # TODO: Create configuration object to reduce number of parameters everywhere
     warper = NumericalLogitsWarper(
@@ -232,7 +258,8 @@ def main_llm(args: argparse.Namespace) -> None:
         numerical_token_ids=num_token_ids,
         padding_token_id=None,
         seperator_token_id=sep_token_id,
-        device=model.device
+        device=model.device,
+
     )
     processed_results = []
     # Prepare generation configuration, to set sampling on, and other samplign techniques
@@ -255,12 +282,13 @@ def main_llm(args: argparse.Namespace) -> None:
             train_sets=train_sets_tokens,
             test_sets=test_sets_tokens,
             model=model,
+            tokenizer=tokenizer,
             logits_warper_constraint=warper,
             generation_config=generation_config,
             seperator_token_id=sep_token_id,
             numerical_token_mask=numerical_token_mask,
             completions=20,
-            parallel=10
+            parallel=1 if 'llama' in model_name else 20
         )
 
 
@@ -277,7 +305,7 @@ def main_llm(args: argparse.Namespace) -> None:
         )
 
         processed_results.append(results)
-        # TODO: Filter responses to have minimum length during processing.
+        # TODO: Filter responses `to have minimum length during processing.
 
         # TODO: Can we add streaming into the mix?
     with open(f'{experiment_name}.data.pickle', 'wb') as f:
@@ -312,8 +340,12 @@ def main_llm(args: argparse.Namespace) -> None:
 
 if __name__ == "__main__":
     default_max_history = 400
-    default_model = "meta-llama/Llama-2-7b-hf"
+    # default_model = "meta-llama/Llama-2-7b-hf"
+    default_model = "meta-llama/Llama-2-13b-hf"
+
     # default_model = 'gpt2'
+    # default_model = 'distilgpt2'
+    # default_model = 'gpt2-large'
     default_dataset = "hpc"
     default_subcat = None
     default_truncate = "before"
