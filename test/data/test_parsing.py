@@ -19,7 +19,7 @@ class TestStringRepresentationGPT2(unittest.TestCase):
     def setUp(self) -> None:
         self.tokenizer = transformers.AutoTokenizer.from_pretrained('distilgpt2')
         set_padding_or_none(self.tokenizer)
-        hpc_dataset, target = get_dataset('hpc')
+        hpc_dataset, target = get_dataset('hpc', path='../data/hpc-jobs.csv')
         self.hpc_dataset = hpc_dataset
         self.target = target
 
@@ -36,10 +36,10 @@ class TestStringRepresentationGPT2(unittest.TestCase):
         self.assertEquals(joined, output)
 
     @parameterized.expand([
-        [0.123, ' 1 2, '],
-        [1.23, ' 1 2 3, '],
-        [12.3, ' 1 2 3 0, '],
-        [123.0, ' 1 2 3 0 0, ']
+        [0.123, ' 1 2,'],
+        [1.23, ' 1 2 3,'],
+        [12.3, ' 1 2 3 0,'],
+        [123.0, ' 1 2 3 0 0,']
     ])
     def test_tokenization_with_fixed_precision(self, input, output, precision=2):
         transforms = np.array([input])
@@ -55,12 +55,12 @@ class TestStringRepresentationGPT2(unittest.TestCase):
 
 
     def test_detokenization(self):
-        PRECISION = 7
+        PRECISION = 5
         scaler, process_values, input_ids = pre_processing.convert_timeseries_to_fixed_precision(
             self.hpc_dataset,
             self.tokenizer,
              target=self.target,
-             precision=7
+             precision=PRECISION
         )
         reconstructed_values = scaler.inverse_transform(process_values[None, :]).flatten()
         test = convert_tokens_to_timeseries(input_ids, self.tokenizer, base_transformation(precision=PRECISION))

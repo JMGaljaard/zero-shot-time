@@ -1,8 +1,11 @@
 import torch
+import transformers
 from transformers import LogitsWarper, add_start_docstrings
 import typing as tp
 
 from transformers.generation.logits_process import LOGITS_PROCESSOR_INPUTS_DOCSTRING
+
+from zero_shot_time.generation.tokenizer import get_token_ids_for_numerical
 
 
 class NumericalLogitsWarper(LogitsWarper):
@@ -34,7 +37,7 @@ class NumericalLogitsWarper(LogitsWarper):
         device="cuda",
     ):
         assert isinstance(vocabulary_size, int), "Vocabulary cardinality needs to be int"
-        assert isinstance(numerical_token_ids, (torch.LongTensor, tp.List[int])), (
+        assert isinstance(numerical_token_ids, list), (
             "Numerical tokens are to be provided in a tensor or " "List."
         )
         assert len(numerical_token_ids) > 0, "Numerical generation requires a non-zero number of token ids"
@@ -64,6 +67,62 @@ class NumericalLogitsWarper(LogitsWarper):
         # inputs [batch_size, vocabulary]
         # scores [batch_size, vocabulary]
 
-        scores[self.mask] = -float("inf")
+        scores[:, self.mask] = -float('inf')
 
         return scores
+
+
+def get_token_masks(seperator: str, padding: str, numerical_encodings: tp.List[str], tokenizer: transformers.GPT2TokenizerFast):
+    """ Helper function to construct a mask to mask out part of the predictions' logits output. Note that
+    seperators and paddings will not be in the set of ;allowable tokesn;, i.e., they will be assigned a `1` value
+    in generated mask.
+    Args:
+        seperator (str): Seperator string between values
+        padding ():
+        numerical_encodings ():
+        tokenizer ():
+
+    Returns:
+
+    """
+    seperator_token_id = None if seperator is None else get_token_ids_for_numerical(
+            seperator,
+            tokenizer
+    )
+    padding_token_id = None if len(padding) == 0 else get_token_ids_for_numerical(padding,
+                                                                                  tokenizer)
+
+    allowable_token_ids = get_token_ids_for_numerical(
+            numerical_encodings,
+            tokenizer
+    )
+
+    allowable_mask = torch.ones(
+        (tokenizer.vocab_size),
+        dtype=torch.bool
+    )
+    allowable_mask[allowable_token_ids] = False
+
+    return seperator_token_id, padding_token_id, allowable_mask
+
+
+class EarlyTerminationWarper(LogitsWarper):
+
+    def __init__(
+        self,
+        seperator_token_id: int,
+        max_sep_count: int,
+        device="cuda",
+    ):
+
+
+        self.device = device
+        self.seperator_token_id = seperator_token_id
+        self.required_count = None
+
+    @add_start_docstrings(LOGITS_PROCESSOR_INPUTS_DOCSTRING)
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
+        pass
+        # inputs [batch_size, vocabulary]
+        # scores [batch_size, vocabulary]
+        # [bs, lenght] =
