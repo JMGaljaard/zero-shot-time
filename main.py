@@ -157,19 +157,32 @@ def main_llm(args: argparse.Namespace) -> None:
     truncation = args.truncate
 
     experiment_name = f'{dataset_name}_{sub_category}_{model_name.split("/")[-1]}'
+    if args.random:
+        experiment_name += '_random'
 
     # 1.1 Load model (note the causal lm !)
 
 
     if 'gpt' in model_name:
-        model: transformers.GPT2Model = transformers.AutoModelForCausalLM.from_pretrained(
-                model_name)
+        if args.random:
+            cnf = transformers.AutoConfig.from_pretrained(model_name)
+            model: transformers.GPT2Model = transformers.AutoModelForCausalLM.from_config(config=cnf)
+        else:
+            model: transformers.GPT2Model = transformers.AutoModelForCausalLM.from_pretrained(
+                    model_name)
         model.to('cuda')
         # 1.2.1 Load and initialize the models' tokenizer and prepare tokenizer for batch-encoding plus.
         tokenizer = transformers.GPT2TokenizerFast.from_pretrained(model_name, token=os.getenv('HF_TOKEN'))
     elif 'meta' in model_name:
-        model = transformers.AutoModelForCausalLM.from_pretrained(
-                model_name, device_map='auto', torch_dtype=torch.float16, token=os.getenv('HF_TOKEN'))
+        if args.random:
+            cnf = transformers.LlamaConfig.from_pretrained(model_name, token=os.getenv('HF_TOKEN'))
+            model = transformers.AutoModelForCausalLM.from_config(
+                    cnf,
+
+                    )
+        else:
+            model = transformers.AutoModelForCausalLM.from_pretrained(
+                    model_name, device_map='auto', torch_dtype=torch.float16, token=os.getenv('HF_TOKEN'))
         tokenizer = transformers.LlamaTokenizerFast.from_pretrained(model_name, token=os.getenv('HF_TOKEN'))
 
     else:
@@ -239,7 +252,7 @@ def main_llm(args: argparse.Namespace) -> None:
     # Instead of using warper, we make use of bad-words list to generate only ...
     good_set = set(num_token_ids + [seperator_token_id])
     generation_config = GenerationConfig(
-        max_new_tokens=160,                     # Limit output (default to 600 for testing)
+        max_new_tokens=200,                     # Limit output (default to 600 for testing)
         do_sample=True,                         # Randomly select
         eos_token_id=model.config.eos_token_id, # EOS token (note that model is not allowed to generate this token :>
         # top_k=11,
@@ -282,13 +295,13 @@ def main_llm(args: argparse.Namespace) -> None:
             train_sets=train_sets_tokens,
             test_sets=test_sets_tokens,
             model=model,
-            tokenizer=tokenizer,
             logits_warper_constraint=warper,
             generation_config=generation_config,
             seperator_token_id=sep_token_id,
             numerical_token_mask=numerical_token_mask,
             completions=20,
-            parallel=1 if 'llama' in model_name else 20
+                attempts=5,
+            parallel=10 if 'llama' in model_name else 20
         )
 
 
@@ -341,11 +354,11 @@ def main_llm(args: argparse.Namespace) -> None:
 if __name__ == "__main__":
     default_max_history = 400
     # default_model = "meta-llama/Llama-2-7b-hf"
-    default_model = "meta-llama/Llama-2-13b-hf"
+    # default_model = "meta-llama/Llama-2-13b-hf"
 
     # default_model = 'gpt2'
     # default_model = 'distilgpt2'
-    # default_model = 'gpt2-large'
+    default_model = 'gpt2-large'
     default_dataset = "hpc"
     default_subcat = None
     default_truncate = "before"
@@ -392,6 +405,13 @@ if __name__ == "__main__":
         choices=["before", "after"],
         default=default_truncate,
         help=f"Truncate time series before or after tokenization (default: {default_truncate})",
+    )
+    llmtime_parser.add_argument(
+        "--random",
+        type=bool,
+        choices=[True, False],
+        default=False,
+        help=f"Whether or not to randomly initialze the model (default: False)",
     )
 
     # Parse command line arguments

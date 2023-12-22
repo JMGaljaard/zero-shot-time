@@ -93,7 +93,8 @@ def get_token_masks(seperator: str, padding: str, numerical_encodings: tp.List[s
                                                                                   tokenizer)
 
     allowable_token_ids = get_token_ids_for_numerical(
-            numerical_encodings
+            numerical_encodings,
+            tokenizer
     )
 
     allowable_mask = torch.ones(
