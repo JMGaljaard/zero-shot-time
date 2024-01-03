@@ -48,8 +48,10 @@ def get_scaler(time_series: np.array, quantile: float = 0.95, beta: float = 0.3,
 
         if local_q == 0:
             local_q = 1
+
         def transform(x):
             return (x - local_min) / local_q
+
         def inverse_transform(x):
             return x * local_q + local_min
 

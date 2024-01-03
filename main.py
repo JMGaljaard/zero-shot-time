@@ -1,22 +1,22 @@
+import argparse
+import logging
 import os
 import pickle
 import typing as tp
-
-import argparse
-import logging
 
 import numpy as np
 import torch
 import tqdm
 import transformers
 from transformers import GenerationConfig
-from zero_shot_time.data.post_processing import convert_tokens_to_timeseries, base_transformation
-from zero_shot_time.data.scaler import Scaler
+
 from zero_shot_time.data import get_dataset, pre_processing
+from zero_shot_time.data.post_processing import base_transformation, convert_tokens_to_timeseries
+from zero_shot_time.data.scaler import Scaler
 from zero_shot_time.data.splits import create_train_test_split, get_custom_train_test_split
 from zero_shot_time.generation import set_padding_or_none
 from zero_shot_time.generation.generation import get_generated_completions
-from zero_shot_time.generation.numerical_logits_warper import get_token_masks, NumericalLogitsWarper
+from zero_shot_time.generation.numerical_logits_warper import NumericalLogitsWarper, get_token_masks
 from zero_shot_time.generation.tokenizer import get_token_ids_for_numerical
 from zero_shot_time.optimization import perform_hyper_parameter_tuning
 from zero_shot_time.optimization.hyper_optimization import process_sets
@@ -411,7 +411,7 @@ if __name__ == "__main__":
         type=bool,
         choices=[True, False],
         default=False,
-        help=f"Whether or not to randomly initialze the model (default: False)",
+        help="Whether or not to randomly initialze the model (default: False)",
     )
 
     # Parse command line arguments

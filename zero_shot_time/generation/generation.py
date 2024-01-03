@@ -4,19 +4,20 @@ import typing as tp
 import torch
 import transformers
 
+
 @torch.no_grad()
 def get_generated_completions(
-        train_sets: tp.List[torch.Tensor],
-        test_sets: tp.List[torch.Tensor],
-        model: transformers.PreTrainedModel,
-        logits_warper_constraint: transformers.LogitsWarper,
-        generation_config: transformers.GenerationConfig = None,
-        completions: int = 20,
-        seperator_token_id: int = None,
-        attempts = 3,
-        numerical_token_mask: torch.BoolTensor = None,
-        parallel: int = 1,
-        to_generate: int = 5,
+    train_sets: tp.List[torch.Tensor],
+    test_sets: tp.List[torch.Tensor],
+    model: transformers.PreTrainedModel,
+    logits_warper_constraint: transformers.LogitsWarper,
+    generation_config: transformers.GenerationConfig = None,
+    completions: int = 20,
+    seperator_token_id: int = None,
+    attempts=3,
+    numerical_token_mask: torch.BoolTensor = None,
+    parallel: int = 1,
+    to_generate: int = 5,
 ) -> tp.Tuple[tp.List[tp.List[torch.LongTensor]], tp.List[tp.List[torch.FloatTensor]]]:
     """Generate completions for a train-set dataset based on a given model.
 
@@ -57,24 +58,20 @@ def get_generated_completions(
             response = model.generate(
                 input_ids=train_view,
                 num_return_sequences=min(parallel, to_gen),
-                attention_mask = torch.ones_like(train_view),
+                attention_mask=torch.ones_like(train_view),
                 generation_config=generation_config,
-                logits_processor=transformers.LogitsProcessorList([
-                    logits_warper_constraint
-                ])
+                logits_processor=transformers.LogitsProcessorList([logits_warper_constraint]),
             )
-            local_scores = torch.stack([
-                score[:, ~numerical_token_mask]
-                for score in response.scores
-            ]).to('cpu')
+            local_scores = torch.stack([score[:, ~numerical_token_mask] for score in response.scores]).to("cpu")
             for samp_indx in range(response.sequences.size(0)):
                 if (sample := torch.sum(response.sequences[samp_indx] == seperator_token_id)) >= min_samples:
-                    prediction.append(response.sequences[samp_indx].detach().to('cpu'))
-                    score.append(local_scores[:, samp_indx].detach().to('cpu'))
+                    prediction.append(response.sequences[samp_indx].detach().to("cpu"))
+                    score.append(local_scores[:, samp_indx].detach().to("cpu"))
                 else:
                     logging.warning(
-                            f"Generated insufficient samples! Required: {min_samples.item()} but got: {sample.item()}!"
-                            f"If you see this many times, you may want to increase the context-length")
+                        f"Generated insufficient samples! Required: {min_samples.item()} but got: {sample.item()}!"
+                        f"If you see this many times, you may want to increase the context-length"
+                    )
             to_gen = completions - len(prediction)
             if to_gen == 0:
                 break

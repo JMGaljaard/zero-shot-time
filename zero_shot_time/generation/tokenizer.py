@@ -13,8 +13,9 @@ def set_padding_or_none(tokenizer: transformers.PreTrainedTokenizerFast, set_pad
     return tokenizer
 
 
-def get_token_ids_for_numerical(tokens: tp.Union[str, tp.List[str]], tokenizer: transformers.PreTrainedTokenizerFast) -> \
-tp.Union[int, tp.List[int]]:
+def get_token_ids_for_numerical(
+    tokens: tp.Union[str, tp.List[str]], tokenizer: transformers.PreTrainedTokenizerFast
+) -> tp.Union[int, tp.List[int]]:
     """
     Common helper function to retrieve token id(s) from an input string. Note that it assumes provided numerical/
     separator tokens can be encoded in a single token.
@@ -39,7 +40,4 @@ tp.Union[int, tp.List[int]]:
         #         for token in tokenizer.batch_encode_plus(tokens, add_special_tokens=False)['input_ids']
         #     ]
         # else:
-        return [
-            get_token_ids_for_numerical(token, tokenizer)
-            for token in tokens
-        ]
+        return [get_token_ids_for_numerical(token, tokenizer) for token in tokens]

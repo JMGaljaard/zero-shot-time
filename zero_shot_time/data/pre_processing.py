@@ -1,6 +1,5 @@
 import typing as tp
 from functools import partial
-from itertools import chain
 
 import numpy as np
 import torch
@@ -9,7 +8,6 @@ from sklearn.base import TransformerMixin
 from transformers import BatchEncoding
 
 import datasets
-
 from zero_shot_time.data.scaler import Scaler, get_scaler
 
 
@@ -36,14 +34,14 @@ def pre_process_llm_values(values, **scaler_kwargs):
 
 def convert_timeseries_to_fixed_precision(
     dataset: datasets.Dataset,
-        tokenizer: transformers.PreTrainedTokenizerFast,
-        values: tp.Optional[np.array] = None,
-        target: str = 'target',
-        precision: int = 5,
-        pre_processor: tp.Optional[tp.Callable] = None,
-        seperator: str = ' ,',
-        form: str = ' {}',
-        **pre_processor_kwargs
+    tokenizer: transformers.PreTrainedTokenizerFast,
+    values: tp.Optional[np.array] = None,
+    target: str = "target",
+    precision: int = 5,
+    pre_processor: tp.Optional[tp.Callable] = None,
+    seperator: str = " ,",
+    form: str = " {}",
+    **pre_processor_kwargs,
 ) -> (TransformerMixin, np.array, torch.LongTensor):
     """Helper function to convert a time-series dataset (split) from numerical representation to a fixed precision
     representation.
@@ -62,14 +60,14 @@ def convert_timeseries_to_fixed_precision(
     else:
         pre_processor, pre_processed_values = pre_processor, pre_processor.transform(np.array(values))
     _, stringified_values = stringify_values(
-        pre_processed_values, precision=precision,value_mapper=partial(map_substring_to_tokens, form=form)
+        pre_processed_values, precision=precision, value_mapper=partial(map_substring_to_tokens, form=form)
     )
-    time_series_tokens = tokenize_values(stringified_values, tokenizer,  seperator=seperator)
+    time_series_tokens = tokenize_values(stringified_values, tokenizer, seperator=seperator)
 
     return pre_processor, pre_processed_values, time_series_tokens
 
 
-def map_substring_to_tokens(value: tp.List[str], sign=None, form = ' {}') -> tp.List[str]:
+def map_substring_to_tokens(value: tp.List[str], sign=None, form=" {}") -> tp.List[str]:
     """Helper function to map a 'stringified' representation of a number to its corresponding 'token string'. E.g. to
     map '0' to ' 0', in case of the default algorithm.
 
@@ -130,7 +128,7 @@ def stringify_values(
 
 
 def tokenize_values(
-    values: tp.Union[tp.List[tp.List[str]]], tokenizer: transformers.PreTrainedTokenizerFast, seperator: str = ' ,'
+    values: tp.Union[tp.List[tp.List[str]]], tokenizer: transformers.PreTrainedTokenizerFast, seperator: str = " ,"
 ):
     """Helper function to convert stringified values to input_ids for a (pre-trained) autoregressive LLM. Requires
     the PADDING ID to be set of the tokenizer (e.g. the EOS token of the model, if no PAD ID is set).
@@ -145,12 +143,12 @@ def tokenize_values(
     pad_id = tokenizer.pad_token_id
     # Pretend that the list of lists is a batch of sentences
     # Hack to make the tokenizer agree with batch_encodign
-    if hasattr(tokenizer, 'add_prefix_space'):
+    if hasattr(tokenizer, "add_prefix_space"):
         # only for gpt2 model
         prefix_space_config = tokenizer.add_prefix_space
         tokenizer.add_prefix_space = True
 
-    if 'llama' in tokenizer.__class__.__name__.lower():
+    if "llama" in tokenizer.__class__.__name__.lower():
         # Hacky solution to abuse tokenizer to represent values in the way we want
         # batch_encoded_values: tp.List[tp.List[int]] = [
         #    tokenizer.convert_tokens_to_ids(
@@ -161,22 +159,19 @@ def tokenize_values(
         #         BatchEncoding({'input_ids': torch.tensor(list(chain(*batch_encoded_values)), dtype=torch.long)}))
         # Note that LLama(2) requires `<s> ` to be part of the prompt :)
         encoded_batch = tokenizer.batch_encode_plus(
-                [''.join([
-                    ''.join(value + [seperator]) for value in (values)
-                ])],
-                return_tensors='pt'
+            ["".join(["".join(value + [seperator]) for value in (values)])], return_tensors="pt"
         )
     else:
         encoded_batch: BatchEncoding = tokenizer.batch_encode_plus(
-                [value + [seperator] for value in values],
-                padding=True,
-                max_length=None,
-                is_split_into_words=True,
-                add_special_tokens=False,
-                return_tensors="pt",
+            [value + [seperator] for value in values],
+            padding=True,
+            max_length=None,
+            is_split_into_words=True,
+            add_special_tokens=False,
+            return_tensors="pt",
         )
 
-    if hasattr(tokenizer, 'add_prefix_space'):
+    if hasattr(tokenizer, "add_prefix_space"):
         # Only for gpt2 model
         tokenizer.add_prefix_space = prefix_space_config
 

@@ -7,24 +7,23 @@ import optuna.study
 import torch
 import transformers.models.gpt2.modeling_gpt2
 from optuna import Study
+from optuna.samplers import BruteForceSampler
+from optuna.trial import Trial
 from tqdm import tqdm
 
 from zero_shot_time.data import pre_processing
-from optuna.samplers import BruteForceSampler
-from optuna.trial import Trial
-
 from zero_shot_time.data.scaler import Scaler
 from zero_shot_time.generation.nll import calculate_negative_log_likelihood
 
 
 def process_sets(
-        param_sets: tp.List[tp.Tuple[tp.List[np.array], tp.List[np.array]]],
-        precision: int = 3,
-        tokenizer: transformers.PreTrainedTokenizerFast = None,
-        drop_test_comma: bool = True,
-        seperator=None,
-        form: str = ' {}',
-        **scaler_kwargs
+    param_sets: tp.List[tp.Tuple[tp.List[np.array], tp.List[np.array]]],
+    precision: int = 3,
+    tokenizer: transformers.PreTrainedTokenizerFast = None,
+    drop_test_comma: bool = True,
+    seperator=None,
+    form: str = " {}",
+    **scaler_kwargs,
 ) -> (tp.List[torch.LongTensor], tp.List[torch.LongTensor], tp.List[Scaler]):
     """Helper function to pre-process a list of train and test sets, using the training sets to re-scale training and
     testing data.
@@ -50,18 +49,26 @@ def process_sets(
         )
         # 2. Pre-process test and re-use scaling so tha
         _, process_values_test, input_ids_test = pre_processing.convert_timeseries_to_fixed_precision(
-            None, tokenizer, values=train_set + test_set, pre_processor=scaler, precision=precision, seperator=seperator, form=form, **scaler_kwargs
+            None,
+            tokenizer,
+            values=train_set + test_set,
+            pre_processor=scaler,
+            precision=precision,
+            seperator=seperator,
+            form=form,
+            **scaler_kwargs,
         )
 
         if drop_test_comma:
             # Remove the last comma seperated value, as we are not going to predict futher than that
             input_ids_test = input_ids_test[:-1]
 
-        train_sets.append(input_ids_train.to('cuda'))
-        test_sets.append(input_ids_test.to('cuda'))
+        train_sets.append(input_ids_train.to("cuda"))
+        test_sets.append(input_ids_test.to("cuda"))
         hyper_scalers.append(scaler)
 
     return train_sets, test_sets, hyper_scalers
+
 
 def curried_hyper_opt(
     study: Study,
@@ -106,11 +113,9 @@ def curried_hyper_opt(
     precision_grid = precision
     tau_grid = tau
     local_offset = offset
-    # TODO: Check if precision requires actual evaluation, as in general longer sequences tend to have higher logits.
-    def llm_hyper_opt(
-            trial: Trial
-    ) -> float:
 
+    # TODO: Check if precision requires actual evaluation, as in general longer sequences tend to have higher logits.
+    def llm_hyper_opt(trial: Trial) -> float:
         """Simple function to perform hyper-opt search using training data split into training and validation (test) sets,
         to perform hyper-parameter tuning. This is performed through a grid-search as described in the original paper.
 
@@ -131,22 +136,25 @@ def curried_hyper_opt(
         """
         # 1. Select hyper-parameters to evaluate on.
         # Retrieve random selection to perform evaluation on.
-        tau = trial.suggest_categorical(name='tau',
-                                        choices=tau_grid)
+        tau = trial.suggest_categorical(name="tau", choices=tau_grid)
 
-        alpha = trial.suggest_categorical('alpha',
-                                          choices=alpha_grid)
+        alpha = trial.suggest_categorical("alpha", choices=alpha_grid)
 
-        beta = trial.suggest_categorical('beta',
-                                         choices=beta_grid)
-        precision = trial.suggest_categorical('precision',
-                                              choices=precision_grid)
+        beta = trial.suggest_categorical("beta", choices=beta_grid)
+        precision = trial.suggest_categorical("precision", choices=precision_grid)
 
         # 0. We check if we can re-use hyper-parameters
         logits = None
-        res = [trial for trial in local_study.trials if (trial.params['alpha'] == alpha and
-                                                   trial.params['beta'] == beta and
-                                                   trial.params['precision'] == precision and trial.params['tau'] != tau)]
+        res = [
+            trial
+            for trial in local_study.trials
+            if (
+                trial.params["alpha"] == alpha
+                and trial.params["beta"] == beta
+                and trial.params["precision"] == precision
+                and trial.params["tau"] != tau
+            )
+        ]
         # if len(res) > 0:
         #     prior_trail: FrozenTrial = res[0]
         #     logits = prior_trail.user_attrs.get('logits', None)
@@ -157,10 +165,10 @@ def curried_hyper_opt(
         # 2. Pre-process and tokenize data
         train_sets_tokens, test_sets_tokens, scalers = process_sets(
             train_eval_sets,
-            precision=precision,                                # Precision (decimal) to continue with
-            tokenizer=tokenizer,                                #
-            quantile=alpha,                                        # Scaler alpha
-            beta=beta,                                          # Scaler beta
+            precision=precision,  # Precision (decimal) to continue with
+            tokenizer=tokenizer,  #
+            quantile=alpha,  # Scaler alpha
+            beta=beta,  # Scaler beta
             seperator=seperator,
             form=form,
         )
@@ -168,26 +176,25 @@ def curried_hyper_opt(
         # TODO: Add 'raw' scores to output / result so we can re-use prior results.
         # 3. Calculate NLL statistic on pre-processed data.
         nll_aggregate = 0
-        for (train_value, test_value), train_set, test_set in tqdm(zip(train_eval_sets, train_sets_tokens, test_sets_tokens),
-                                                                   total=len(train_eval_sets)):
+        for (train_value, test_value), train_set, test_set in tqdm(
+            zip(train_eval_sets, train_sets_tokens, test_sets_tokens), total=len(train_eval_sets)
+        ):
             # Retrieve grad (scalar) from learned scaler
-            dy_dx = jax.vmap(jax.grad(scalers[0].transform))(
-                np.array(train_value)
-            ).mean().item()
+            dy_dx = jax.vmap(jax.grad(scalers[0].transform))(np.array(train_value)).mean().item()
             logits, nll_ = calculate_negative_log_likelihood(
-                model=model,                                    #
-                input_token_ids=train_set,                      # Provide input in token_id representation
-                target_token_ids=test_set,                      # Provide targets in token_id representation
-                separator_token_id=seperator_token_id,          #
-                padding_token_id=padding_token_id,              #
-                dy_dx=dy_dx,                                    # Conversion from scaled back to 'ordinary' values.
-                token_mask=allowable_tokens_mask,               #
+                model=model,  #
+                input_token_ids=train_set,  # Provide input in token_id representation
+                target_token_ids=test_set,  # Provide targets in token_id representation
+                separator_token_id=seperator_token_id,  #
+                padding_token_id=padding_token_id,  #
+                dy_dx=dy_dx,  # Conversion from scaled back to 'ordinary' values.
+                token_mask=allowable_tokens_mask,  #
                 precision=precision,
                 base=10,
                 temperature=tau,
-                pre_computed_logits=None,                      # Possibly re-use some results during hyper-parameter search,
+                pre_computed_logits=None,  # Possibly re-use some results during hyper-parameter search,
                 offset=local_offset,
-                prediction_len=len(test_set) - len(train_set)    # Prediction length
+                prediction_len=len(test_set) - len(train_set),  # Prediction length
             )
             # trial.set_user_attr('logits', logits.detach().cpu())
             nll_aggregate += nll_
@@ -198,21 +205,20 @@ def curried_hyper_opt(
     return llm_hyper_opt
 
 
-
 def perform_hyper_parameter_tuning(
-        dataset_name: str,
-        model_name: str,
-        model: transformers.PreTrainedModel,
-        tokenizer: transformers.PreTrainedTokenizerFast,
-        data_sets: tp.List[tp.List[tp.Tuple[np.array, np.array]]],
-        allowable_token_mask: torch.BoolTensor,
-        seperator_token_id: int,
-        seperator: str,
-        form: str,
-        padding_token_id: int,
-        search_space: dict[str, tp.List[tp.Any]],
-        offset: int = 0,
-        experiment_name: str = 'test'
+    dataset_name: str,
+    model_name: str,
+    model: transformers.PreTrainedModel,
+    tokenizer: transformers.PreTrainedTokenizerFast,
+    data_sets: tp.List[tp.List[tp.Tuple[np.array, np.array]]],
+    allowable_token_mask: torch.BoolTensor,
+    seperator_token_id: int,
+    seperator: str,
+    form: str,
+    padding_token_id: int,
+    search_space: dict[str, tp.List[tp.Any]],
+    offset: int = 0,
+    experiment_name: str = "test",
 ) -> Study:
     """
 
@@ -234,10 +240,7 @@ def perform_hyper_parameter_tuning(
     """
     storage = f"sqlite:///{experiment_name}.db"
     study = optuna.create_study(
-        study_name=experiment_name,
-        storage=storage,
-        sampler=BruteForceSampler(seed=42),
-        load_if_exists=True
+        study_name=experiment_name, storage=storage, sampler=BruteForceSampler(seed=42), load_if_exists=True
     )
     max_trails = np.prod([len(v) for _, v in search_space.items()])
 
@@ -252,10 +255,10 @@ def perform_hyper_parameter_tuning(
         seperator_token_id=seperator_token_id,
         form=form,
         padding_token_id=padding_token_id,
-        alpha=search_space['alpha'],
-        beta=search_space['beta'],
-        precision=search_space['precision'],
-        tau=search_space['tau'],
+        alpha=search_space["alpha"],
+        beta=search_space["beta"],
+        precision=search_space["precision"],
+        tau=search_space["tau"],
         offset=offset,
     )
     if study.trials is not None and len(study.trials) < max_trails:

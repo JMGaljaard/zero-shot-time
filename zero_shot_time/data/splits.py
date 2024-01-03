@@ -1,8 +1,9 @@
 import logging
+import typing as tp
+
+import numpy as np
 
 import datasets
-import numpy as np
-import typing as tp
 
 
 def create_validation_split(train_series: np.array, test_length: int) -> (np.array, np.array):
@@ -60,7 +61,7 @@ def create_train_test_split(
     for train_set, test_set in zip(train_dataset[target], test_dataset[target]):
         prediction_length = len(test_set) - len(train_set)
         # Limit the maximum length of the dataset to `max_length`
-        limit_train_set = train_set[-(max_length + prediction_length):]
+        limit_train_set = train_set[-(max_length + prediction_length) :]
         if len(test_set) > max_length:
             logging.fatal("Length of test dataset exceeds maximum length also!")
 
@@ -74,6 +75,7 @@ def create_train_test_split(
         test_sets.append(test_set[-prediction_length:])
 
     return param_sets, train_sets, test_sets
+
 
 def get_custom_train_test_split(
     full_data: np.array,
@@ -99,10 +101,9 @@ def get_custom_train_test_split(
     total_len = len(full_data)
     prediction_length = int(split_fraction * total_len)
     train_set = full_data[:-prediction_length].tolist()
-    test_set = full_data[-prediction_length: ].tolist()
+    test_set = full_data[-prediction_length:].tolist()
 
-    limit_train_set = train_set[-(max_length + prediction_length):]
-
+    limit_train_set = train_set[-(max_length + prediction_length) :]
 
     # Create hyper-parameter split for zero-shot training
     train_h, val_h = create_validation_split(limit_train_set, prediction_length)

@@ -1,6 +1,5 @@
 import torch
 import transformers
-from transformers import LogitsWarper
 from transformers.generation.utils import GenerateOutput
 
 
@@ -15,9 +14,9 @@ def calculate_negative_log_likelihood(
     precision: int = 3,
     base: int = 10,
     temperature: float = 0.7,
-    pre_computed_logits = None,
-    offset = 0,
-    prediction_len = 8,
+    pre_computed_logits=None,
+    offset=0,
+    prediction_len=8,
 ):
     """
     Calculate the Negative Log-Likelihood (NLL) per dimension using the output logits of a Language Model (LM)
@@ -61,7 +60,7 @@ def calculate_negative_log_likelihood(
         if not isinstance(pre_computed_logits, torch.Tensor):
             # Grads shall not pass!
             response: GenerateOutput = model.forward(
-                full_series.unsqueeze(0),            # Get whole series, create 'virtual batch'
+                full_series.unsqueeze(0),  # Get whole series, create 'virtual batch'
             )
             # TODO: Check wether we have to re-scale by the temperature.
             logits = response.logits / temperature
